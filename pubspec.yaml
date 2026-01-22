@@ -30,10 +30,20 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  url_launcher: ^6.1.10
+  audioplayers: ^6.5.1
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  wakelock_plus: ^1.4.0
+  map_launcher: ^4.4.2
+  shared_preferences: ^2.0.15
+  image_picker: ^0.8.7+4
+  signature: ^5.5.0
+  path_provider: ^2.0.0
+  path: ^1.8.2
+  share_plus: ^12.0.1
 
 dev_dependencies:
   flutter_test:
@@ -56,6 +66,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/final.mp3
+    - assets/mario.mp3
+    - assets/chama.mp3
 
   # To add assets to your application, add an assets section, like this:
   # assets:
