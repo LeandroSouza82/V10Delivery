@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart';
 import 'package:map_launcher/map_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
@@ -135,6 +136,41 @@ class RotaMotoristaState extends State<RotaMotorista>
       "obs": "Retirar pacotes da tarde.",
     },
   ];
+  // CONTROLE DO MODAL DE SUCESSO (OK)
+  final TextEditingController _nomeController = TextEditingController();
+  final TextEditingController _aptController = TextEditingController();
+
+  final List<String> _opcoesEntrega = [
+    'PRÓPRIO',
+    'OUTROS',
+    'ZELADOR',
+    'SÍNDICO',
+    'PORTEIRO',
+    'FAXINEIRA',
+    'MORADOR',
+    'LOCKER',
+    'CORREIO',
+  ];
+
+  final List<String> _opcoesLockerCorreio = [
+    'ZELADOR',
+    'SÍNDICO',
+    'PORTEIRO',
+    'FAXINEIRA',
+    'MORADOR',
+  ];
+
+  String? _selectedRecebimento;
+  String? _selectedQuemRecebeu;
+  bool _isLockerCorreio = false;
+  bool _isButtonEnabled = false;
+  bool _assinaturaColetadaLocal = false;
+  int _currentCardIndex = -1;
+  String _horaAtual = '';
+  // Caminho da foto de falha (usado pelo modal de FALHA)
+  String? imagemFalha;
+  // Motivo selecionado para falha (guardado no estado para reset/inspeção)
+  String? motivoFalhaSelecionada;
   // Contadores dinâmicos (iniciados com 0 por segurança de null-safety)
   int entregasFaltam = 0;
   int recolhasFaltam = 0;
@@ -188,6 +224,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     _signatureController.dispose();
     _buscarController.dispose();
     _audioPlayer.dispose();
+    _nomeController.dispose();
+    _aptController.dispose();
     super.dispose();
   }
 
@@ -198,6 +236,285 @@ class RotaMotoristaState extends State<RotaMotorista>
       _audioPlayer;
     } catch (_) {
       _audioPlayer = AudioPlayer();
+    }
+  }
+
+  // Abre o modal de sucesso (OK)
+  // ignore: unused_element
+  void _openSuccessModal(int index) {
+    // Limpeza total
+    _nomeController.clear();
+    _aptController.clear();
+
+    setState(() {
+      _currentCardIndex = index;
+      _selectedRecebimento = null;
+      _selectedQuemRecebeu = null;
+      _isLockerCorreio = false;
+      _isButtonEnabled = false;
+      _assinaturaColetadaLocal = false;
+      _horaAtual = DateFormat('HH:mm').format(DateTime.now());
+    });
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _buildSuccessModal(),
+    );
+  }
+
+  Widget _buildSuccessModal() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+        ),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(20),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'CONFIRMAR ENTREGA',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 20),
+
+              Text(
+                'Como foi entregue?',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              SizedBox(height: 10),
+
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: _opcoesEntrega
+                    .map((opcao) => _buildOptionButton(opcao))
+                    .toList(),
+              ),
+
+              if (_isLockerCorreio && _selectedRecebimento != null)
+                Column(
+                  children: [
+                    SizedBox(height: 20),
+                    Text(
+                      'Quem recebeu no $_selectedRecebimento?',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: _opcoesLockerCorreio
+                          .map((opcao) => _buildSecondaryOption(opcao))
+                          .toList(),
+                    ),
+                  ],
+                ),
+
+              if (!_isLockerCorreio && _selectedRecebimento != null)
+                Column(
+                  children: [
+                    SizedBox(height: 20),
+                    TextField(
+                      controller: _nomeController,
+                      decoration: InputDecoration(
+                        labelText: 'Nome de quem recebeu',
+                        border: OutlineInputBorder(),
+                        filled: true,
+                        fillColor: Colors.grey[100],
+                      ),
+                      onChanged: (_) => _checkCompletion(),
+                    ),
+                    SizedBox(height: 15),
+                    TextField(
+                      controller: _aptController,
+                      decoration: InputDecoration(
+                        labelText: 'Apartamento',
+                        border: OutlineInputBorder(),
+                        filled: true,
+                        fillColor: Colors.grey[100],
+                      ),
+                      onChanged: (_) => _checkCompletion(),
+                    ),
+                    SizedBox(height: 15),
+                    ElevatedButton.icon(
+                      onPressed: () => _collectSignature(),
+                      icon: Icon(Icons.draw),
+                      label: Text('COLHER ASSINATURA'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue[700],
+                        foregroundColor: Colors.white,
+                        minimumSize: Size(double.infinity, 50),
+                      ),
+                    ),
+                    if (_assinaturaColetadaLocal)
+                      Padding(
+                        padding: EdgeInsets.only(top: 10),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.check_circle, color: Colors.green),
+                            SizedBox(width: 8),
+                            Text(
+                              'Assinatura coletada',
+                              style: TextStyle(
+                                color: Colors.green,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+
+              SizedBox(height: 30),
+
+              ElevatedButton(
+                onPressed: _isButtonEnabled ? _finalizeDelivery : null,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _isButtonEnabled
+                      ? Colors.green[700]
+                      : Colors.grey[400],
+                  foregroundColor: Colors.white,
+                  minimumSize: Size(double.infinity, 56),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  'ENVIAR PARA GESTOR',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOptionButton(String text) {
+    return ChoiceChip(
+      label: Text(text),
+      selected: _selectedRecebimento == text,
+      onSelected: (selected) {
+        setState(() {
+          _selectedRecebimento = text;
+          _isLockerCorreio = (text == 'LOCKER' || text == 'CORREIO');
+          _selectedQuemRecebeu = null; // reset
+          _checkCompletion();
+        });
+      },
+      selectedColor: Colors.blue[100],
+      labelStyle: TextStyle(
+        color: _selectedRecebimento == text ? Colors.blue[900] : Colors.black,
+        fontWeight: _selectedRecebimento == text
+            ? FontWeight.bold
+            : FontWeight.normal,
+      ),
+    );
+  }
+
+  Widget _buildSecondaryOption(String text) {
+    return ChoiceChip(
+      label: Text(text),
+      selected: _selectedQuemRecebeu == text,
+      onSelected: (selected) {
+        setState(() {
+          _selectedQuemRecebeu = text;
+          _checkCompletion();
+        });
+      },
+      selectedColor: Colors.green[100],
+      labelStyle: TextStyle(
+        color: _selectedQuemRecebeu == text ? Colors.green[900] : Colors.black,
+        fontWeight: _selectedQuemRecebeu == text
+            ? FontWeight.bold
+            : FontWeight.normal,
+      ),
+    );
+  }
+
+  void _checkCompletion() {
+    if (_isLockerCorreio) {
+      setState(() {
+        _isButtonEnabled = _selectedQuemRecebeu != null;
+      });
+    } else {
+      setState(() {
+        _isButtonEnabled =
+            _selectedRecebimento != null &&
+            _nomeController.text.isNotEmpty &&
+            _aptController.text.isNotEmpty &&
+            _assinaturaColetadaLocal;
+      });
+    }
+  }
+
+  void _collectSignature() async {
+    // Simulação simples de coleta de assinatura
+    setState(() {
+      _assinaturaColetadaLocal = true;
+    });
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Assinatura coletada com sucesso')));
+    _checkCompletion();
+  }
+
+  void _finalizeDelivery() async {
+    try {
+      if (_currentCardIndex < 0 || _currentCardIndex >= entregas.length) return;
+      String message = _buildWhatsAppMessage();
+      String encodedMessage = Uri.encodeComponent(message);
+      String whatsappUrl = 'https://wa.me/5548996525008?text=$encodedMessage';
+
+      if (await canLaunchUrl(Uri.parse(whatsappUrl))) {
+        await launchUrl(
+          Uri.parse(whatsappUrl),
+          mode: LaunchMode.externalApplication,
+        );
+        await Future.delayed(Duration(seconds: 2));
+
+        setState(() {
+          if (_currentCardIndex >= 0 && _currentCardIndex < entregas.length) {
+            entregas.removeAt(_currentCardIndex);
+          }
+        });
+
+        if (!mounted) return;
+        Navigator.pop(context);
+      } else {
+        throw 'Não foi possível abrir o WhatsApp';
+      }
+    } catch (e) {
+      debugPrint('Erro ao finalizar entrega: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro: $e')));
+      }
+    }
+  }
+
+  String _buildWhatsAppMessage() {
+    final card = entregas[_currentCardIndex];
+    if (_isLockerCorreio) {
+      return '''📦 *ENTREGA CONCLUÍDA*\n*Status:* Entregue no $_selectedRecebimento\n*Recebido por:* $_selectedQuemRecebeu\n*Cliente:* ${card['cliente']}\n*Endereço:* ${card['endereco']}\n*Motorista:* LEANDRO\n*Hora:* $_horaAtual''';
+    } else {
+      return '''📦 *ENTREGA CONCLUÍDA*\n*Status:* Entregue em mãos\n*Recebido por:* $_selectedRecebimento\n*Nome:* ${_nomeController.text}\n*Apto:* ${_aptController.text}\n*Cliente:* ${card['cliente']}\n*Endereço:* ${card['endereco']}\n*Motorista:* LEANDRO\n*Assinatura coletada:* ✅\n*Hora:* $_horaAtual''';
     }
   }
 
@@ -251,6 +568,74 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (e) {
       // erro ignorado - remover logs de depuração
     }
+  }
+
+  // Envia relatório de falha para o gestor, toca som, remove o card e fecha modal
+  Future<void> _enviarFalha(
+    String cardId,
+    String cliente,
+    String endereco,
+    String motivoFinal,
+  ) async {
+    final hora = DateFormat('HH:mm').format(DateTime.now());
+    final hasPhoto = imagemFalha != null;
+
+    final report =
+        '❌ *RELATÓRIO DE FALHA*\n'
+        'Status: Não Realizada\n'
+        'Motivo: $motivoFinal\n'
+        'Cliente: $cliente\n'
+        'Endereço: $endereco\n'
+        'Motorista: LEANDRO\n'
+        'Foto: ${hasPhoto ? '✅' : '❌'}\n'
+        'Hora: $hora';
+
+    final wa = Uri.parse(
+      'https://api.whatsapp.com/send?phone=$numeroGestor&text=${Uri.encodeComponent(report)}',
+    );
+
+    try {
+      if (await canLaunchUrl(wa)) {
+        await launchUrl(wa, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      // ignorar falha ao abrir WhatsApp
+    }
+
+    // Tocar mario por 2s
+    try {
+      await _audioPlayer.play(AssetSource('mario.mp3'));
+      await Future.delayed(Duration(seconds: 2));
+      await _audioPlayer.stop();
+    } catch (e) {
+      // ignorar erro de áudio
+    }
+
+    // Parar qualquer som de fundo antes de remover
+    try {
+      await _stopAnyAudio();
+    } catch (e) {
+      // ignorar
+    }
+
+    setState(() {
+      entregas.removeWhere((c) => c['id'] == cardId);
+      imagemFalha = null;
+      motivoFalhaSelecionada = null;
+    });
+
+    // Se não há mais entregas, parar qualquer loop de som
+    if (entregas.isEmpty) {
+      setState(() => _searchingActive = false);
+      try {
+        await _stopAnyAudio();
+      } catch (e) {
+        // ignorar
+      }
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pop();
   }
 
   Future<void> _salvarMapaSelecionado(String mapName) async {
@@ -498,7 +883,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         '*📍 Cliente:* ${item['cliente']}\n'
         '*🏠 Endereço:* ${item['endereco']}\n'
         '*👤 Recebido por:* ${nomeRecebedor.isNotEmpty ? nomeRecebedor : nomeMotorista}\n'
-        '*🕒 Horário:* ${DateTime.now().hour}:${DateTime.now().minute}\n'
+        '*🕒 Horário:* $horario\n'
         '*✅ Status:* Concluído';
 
     // coletar arquivos existentes
@@ -1058,7 +1443,6 @@ class RotaMotoristaState extends State<RotaMotorista>
                             onPressed: () {
                               final TextEditingController
                               motivoOutrosController = TextEditingController();
-                              String? motivoSelecionado;
                               final motivos = [
                                 'Cliente Ausente',
                                 'Endereço Incorreto',
@@ -1070,12 +1454,27 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 'Sem Acesso',
                               ];
 
+                              // Reset imagemFalha e motivo ao abrir o modal (garantia explícita)
+                              setState(() {
+                                imagemFalha = null;
+                                motivoFalhaSelecionada = null;
+                              });
+
                               showDialog(
                                 context: context,
                                 builder: (ctx) {
                                   return StatefulBuilder(
                                     builder: (ctx2, setStateDialog) {
-                                      XFile? pickedImage;
+                                      XFile? pickedImageLocal =
+                                          imagemFalha != null
+                                          ? XFile(imagemFalha!)
+                                          : null;
+                                      String? motivoSelecionadoLocal =
+                                          motivoFalhaSelecionada;
+
+                                      final String pickedPath =
+                                          pickedImageLocal?.path ?? '';
+
                                       return AlertDialog(
                                         backgroundColor: Colors.grey[900],
                                         title: Row(
@@ -1093,24 +1492,37 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                 Icons.camera_alt,
                                                 color: Colors.white,
                                               ),
-                                              onPressed: () async {
-                                                final picker = ImagePicker();
-                                                try {
-                                                  final XFile? photo =
-                                                      await picker.pickImage(
-                                                        source:
-                                                            ImageSource.camera,
-                                                        imageQuality: 70,
-                                                      );
-                                                  if (photo != null) {
-                                                    setStateDialog(
-                                                      () => pickedImage = photo,
-                                                    );
-                                                  }
-                                                } catch (e) {
-                                                  // falha ao abrir/capturar, apenas ignore
-                                                }
-                                              },
+                                              onPressed:
+                                                  motivoSelecionadoLocal == null
+                                                  ? null
+                                                  : () async {
+                                                      final picker =
+                                                          ImagePicker();
+                                                      try {
+                                                        final XFile?
+                                                        photo = await picker
+                                                            .pickImage(
+                                                              source:
+                                                                  ImageSource
+                                                                      .camera,
+                                                              imageQuality: 70,
+                                                            );
+                                                        if (photo != null) {
+                                                          // armazenar caminho em estado pai e local
+                                                          setState(() {
+                                                            imagemFalha =
+                                                                photo.path;
+                                                          });
+                                                          setStateDialog(
+                                                            () =>
+                                                                pickedImageLocal =
+                                                                    photo,
+                                                          );
+                                                        }
+                                                      } catch (e) {
+                                                        // falha ao abrir/capturar, apenas ignore
+                                                      }
+                                                    },
                                             ),
                                           ],
                                         ),
@@ -1125,31 +1537,46 @@ class RotaMotoristaState extends State<RotaMotorista>
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.stretch,
                                               children: [
-                                                if (pickedImage != null) ...[
-                                                  Center(
-                                                    child: Container(
-                                                      width: 80,
-                                                      height: 80,
-                                                      margin: EdgeInsets.only(
-                                                        bottom: 8,
-                                                      ),
-                                                      decoration: BoxDecoration(
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              8,
-                                                            ),
-                                                        image: DecorationImage(
-                                                          image: FileImage(
-                                                            File(
-                                                              pickedImage!.path,
-                                                            ),
-                                                          ),
-                                                          fit: BoxFit.cover,
-                                                        ),
-                                                      ),
+                                                // Espaço da Foto (Topo)
+                                                Center(
+                                                  child: Container(
+                                                    width: 96,
+                                                    height: 96,
+                                                    margin: EdgeInsets.only(
+                                                      bottom: 12,
                                                     ),
+                                                    decoration: BoxDecoration(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            8,
+                                                          ),
+                                                      color: Colors.grey[850],
+                                                      image:
+                                                          pickedImageLocal !=
+                                                              null
+                                                          ? DecorationImage(
+                                                              image: FileImage(
+                                                                File(
+                                                                  pickedPath,
+                                                                ),
+                                                              ),
+                                                              fit: BoxFit.cover,
+                                                            )
+                                                          : null,
+                                                    ),
+                                                    child:
+                                                        pickedImageLocal == null
+                                                        ? Icon(
+                                                            Icons.camera_alt,
+                                                            color:
+                                                                Colors.white54,
+                                                            size: 36,
+                                                          )
+                                                        : null,
                                                   ),
-                                                ],
+                                                ),
+
+                                                // Seletor de Motivos
                                                 GridView.count(
                                                   crossAxisCount: 2,
                                                   mainAxisSpacing: 10,
@@ -1162,7 +1589,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                     motivo,
                                                   ) {
                                                     final bool isSel =
-                                                        motivoSelecionado ==
+                                                        motivoSelecionadoLocal ==
                                                         motivo;
                                                     return ElevatedButton(
                                                       style: ElevatedButton.styleFrom(
@@ -1179,7 +1606,13 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                       onPressed: () {
                                                         setStateDialog(
                                                           () =>
-                                                              motivoSelecionado =
+                                                              motivoSelecionadoLocal =
+                                                                  motivo,
+                                                        );
+                                                        // atualizar também no estado pai para rastreio/reatividade
+                                                        setState(
+                                                          () =>
+                                                              motivoFalhaSelecionada =
                                                                   motivo,
                                                         );
                                                       },
@@ -1203,7 +1636,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                 ),
 
                                                 SizedBox(height: 12),
-                                                if (motivoSelecionado ==
+                                                if (motivoSelecionadoLocal ==
                                                     'Outros Motivos') ...[
                                                   TextField(
                                                     controller:
@@ -1226,12 +1659,78 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                 ],
 
                                                 SizedBox(height: 8),
+
+                                                // Botão de captura: habilitado somente após motivo selecionado
+                                                SizedBox(
+                                                  width: double.infinity,
+                                                  child: ElevatedButton.icon(
+                                                    icon: Icon(
+                                                      Icons.camera_alt,
+                                                    ),
+                                                    label: Text(
+                                                      'TIRAR FOTO (EVIDÊNCIA)',
+                                                    ),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor:
+                                                          motivoSelecionadoLocal ==
+                                                              null
+                                                          ? Colors.grey[700]
+                                                          : Colors.orange[700],
+                                                      padding:
+                                                          EdgeInsets.symmetric(
+                                                            vertical: 14,
+                                                          ),
+                                                    ),
+                                                    onPressed:
+                                                        motivoSelecionadoLocal ==
+                                                            null
+                                                        ? null
+                                                        : () async {
+                                                            final picker =
+                                                                ImagePicker();
+                                                            try {
+                                                              final XFile?
+                                                              photo = await picker
+                                                                  .pickImage(
+                                                                    source: ImageSource
+                                                                        .camera,
+                                                                    imageQuality:
+                                                                        70,
+                                                                  );
+                                                              if (photo !=
+                                                                  null) {
+                                                                setState(() {
+                                                                  imagemFalha =
+                                                                      photo
+                                                                          .path;
+                                                                });
+                                                                setStateDialog(
+                                                                  () =>
+                                                                      pickedImageLocal =
+                                                                          photo,
+                                                                );
+                                                              }
+                                                            } catch (e) {
+                                                              // ignore
+                                                            }
+                                                          },
+                                                  ),
+                                                ),
+
+                                                SizedBox(height: 12),
+
+                                                // Botão ENVIAR NOTIFICAÇÃO (habilitado apenas quando motivo e imagem presentes)
                                                 SizedBox(
                                                   width: double.infinity,
                                                   child: ElevatedButton(
                                                     style: ElevatedButton.styleFrom(
                                                       backgroundColor:
-                                                          Colors.red,
+                                                          (motivoSelecionadoLocal !=
+                                                                  null &&
+                                                              imagemFalha !=
+                                                                  null)
+                                                          ? Colors.red
+                                                          : Colors.grey[700],
                                                       padding:
                                                           EdgeInsets.symmetric(
                                                             vertical: 16,
@@ -1242,29 +1741,34 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                             FontWeight.bold,
                                                       ),
                                                     ),
-                                                    onPressed: () async {
-                                                      if (motivoSelecionado ==
-                                                          null) {
-                                                        ScaffoldMessenger.of(
-                                                          context,
-                                                        ).showSnackBar(
-                                                          SnackBar(
-                                                            content: Text(
-                                                              'Selecione um motivo.',
-                                                            ),
-                                                          ),
-                                                        );
-                                                        return;
-                                                      }
+                                                    onPressed:
+                                                        (motivoSelecionadoLocal !=
+                                                                null &&
+                                                            imagemFalha != null)
+                                                        ? () async {
+                                                            final motivoFinal =
+                                                                motivoSelecionadoLocal ==
+                                                                        'Outros Motivos' &&
+                                                                    motivoOutrosController
+                                                                        .text
+                                                                        .isNotEmpty
+                                                                ? motivoOutrosController
+                                                                      .text
+                                                                : motivoSelecionadoLocal ??
+                                                                      'Não informado';
 
-                                                      Navigator.of(ctx).pop();
-                                                      // Remover imediatamente, tocar efeitos e abrir WhatsApp;
-                                                      // histórico e salvamentos serão processados em background.
-                                                      _compartilharRelatorio(
-                                                        index,
-                                                        nomeMotorista,
-                                                      );
-                                                    },
+                                                            final card =
+                                                                entregas[index];
+                                                            await _enviarFalha(
+                                                              card['id'] ?? '',
+                                                              card['cliente'] ??
+                                                                  '',
+                                                              card['endereco'] ??
+                                                                  '',
+                                                              motivoFinal,
+                                                            );
+                                                          }
+                                                        : null,
                                                     child: Text(
                                                       'ENVIAR NOTIFICAÇÃO',
                                                     ),
