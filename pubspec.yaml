@@ -69,11 +69,11 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/final.mp3
-    - assets/mario.mp3
-    - assets/chama.mp3
-
-  # To add assets to your application, add an assets section, like this:
+    - assets/audios/falha_3.mp3
+    - assets/audios/sucesso.mp3
+    - assets/audios/final.mp3
+    - assets/audios/chama.mp3
+    - assets/images/    # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg

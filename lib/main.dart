@@ -7,7 +7,6 @@ import 'package:map_launcher/map_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
-import 'package:signature/signature.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:audioplayers/audioplayers.dart';
@@ -59,28 +58,44 @@ class V10DeliveryApp extends StatelessWidget {
 }
 
 Future<void> _enviarWhatsApp(String mensagem, {String? phone}) async {
-  final encoded = Uri.encodeComponent(mensagem);
+  // Construir Uri com `Uri` para garantir codificação correta
   Uri uri;
   if (phone != null && phone.isNotEmpty) {
-    // Enviar direto para número específico
-    uri = Uri.parse('https://wa.me/$phone?text=$encoded');
+    uri = Uri.https('api.whatsapp.com', '/send', {
+      'phone': phone,
+      'text': mensagem,
+    });
   } else {
-    // URI genérica (abrirá seleção de contato)
-    uri = Uri.parse('https://wa.me/?text=$encoded');
+    uri = Uri.https('api.whatsapp.com', '/send', {'text': mensagem});
   }
 
   try {
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  } catch (e) {
-    // fallback: tentar abrir com esquema whatsapp
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      return;
+    }
+  } catch (_) {}
+
+  // fallback para esquema nativo do WhatsApp
+  try {
     Uri whatsapp;
     if (phone != null && phone.isNotEmpty) {
-      whatsapp = Uri.parse('whatsapp://send?phone=$phone&text=$encoded');
+      whatsapp = Uri(
+        scheme: 'whatsapp',
+        host: 'send',
+        queryParameters: {'phone': phone, 'text': mensagem},
+      );
     } else {
-      whatsapp = Uri.parse('whatsapp://send?text=$encoded');
+      whatsapp = Uri(
+        scheme: 'whatsapp',
+        host: 'send',
+        queryParameters: {'text': mensagem},
+      );
     }
-    await launchUrl(whatsapp, mode: LaunchMode.externalApplication);
-  }
+    if (await canLaunchUrl(whatsapp)) {
+      await launchUrl(whatsapp, mode: LaunchMode.externalApplication);
+    }
+  } catch (_) {}
 }
 
 class RotaMotorista extends StatefulWidget {
@@ -93,10 +108,7 @@ class RotaMotorista extends StatefulWidget {
 class RotaMotoristaState extends State<RotaMotorista>
     with SingleTickerProviderStateMixin {
   final String nomeMotorista = "LEANDRO";
-  // assinatura digital
-  bool assinaturaColetada = false;
-  late SignatureController _signatureController;
-  String? caminhoAssinaturaSession;
+  // signature modal and related session path removed
   String? caminhoFotoSession;
   XFile? fotoEvidencia;
   late AnimationController _buscarController;
@@ -108,7 +120,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   final Set<int> _pressedIndices = {};
 
   // Áudio: usar única instância para evitar consumo excessivo de memória
-  late AudioPlayer _audioPlayer;
+  final AudioPlayer _audioPlayer = AudioPlayer();
   bool _searchingActive = false; // true quando animação de busca está ativa
   bool _awaitStartChama = false; // usado para iniciar loop após som final
 
@@ -152,21 +164,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     'CORREIO',
   ];
 
-  final List<String> _opcoesLockerCorreio = [
-    'ZELADOR',
-    'SÍNDICO',
-    'PORTEIRO',
-    'FAXINEIRA',
-    'MORADOR',
-  ];
-
-  String? _selectedRecebimento;
-  String? _selectedQuemRecebeu;
-  bool _isLockerCorreio = false;
-  bool _isButtonEnabled = false;
-  bool _assinaturaColetadaLocal = false;
-  int _currentCardIndex = -1;
-  String _horaAtual = '';
+  // removed unused _currentCardIndex
   // Caminho da foto de falha (usado pelo modal de FALHA)
   String? imagemFalha;
   // Motivo selecionado para falha (guardado no estado para reset/inspeção)
@@ -182,12 +180,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     super.initState();
     // Calcular contadores iniciais
     _atualizarContadores();
-    // inicializar controller de assinatura
-    _signatureController = SignatureController(
-      penStrokeWidth: 3,
-      penColor: Colors.black,
-      exportBackgroundColor: Colors.white,
-    );
+    // signature controller removed
 
     // animação de procura de rotas (opacidade pulsante)
     _buscarController = AnimationController(
@@ -198,17 +191,19 @@ class RotaMotoristaState extends State<RotaMotorista>
       CurvedAnimation(parent: _buscarController, curve: Curves.easeInOut),
     );
 
-    // inicializar audio player
-    _audioPlayer = AudioPlayer();
     // quando um som terminar, se sinalizado, iniciar o loop do 'chama.mp3'
     _audioPlayer.onPlayerComplete.listen((event) {
       if (_awaitStartChama) {
         _awaitStartChama = false;
         if (_searchingActive) _startChamaLoop();
-      } else {
-        // estado interno removido
       }
     });
+
+    // Garantir configurações iniciais do player
+    try {
+      _audioPlayer.setReleaseMode(ReleaseMode.stop);
+      _audioPlayer.setVolume(1.0);
+    } catch (_) {}
 
     // Carregar preferência de app de mapa salvo
     SharedPreferences.getInstance().then((prefs) {
@@ -221,7 +216,6 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   @override
   void dispose() {
-    _signatureController.dispose();
     _buscarController.dispose();
     _audioPlayer.dispose();
     _nomeController.dispose();
@@ -230,344 +224,92 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   // TOOLS DE ÁUDIO
-  void _ensureAudioPlayer() {
-    try {
-      // acessa para checar se foi inicializado (pode lançar LateInitializationError)
-      _audioPlayer;
-    } catch (_) {
-      _audioPlayer = AudioPlayer();
-    }
-  }
-
-  // Abre o modal de sucesso (OK)
   // ignore: unused_element
-  void _openSuccessModal(int index) {
-    // Limpeza total
-    _nomeController.clear();
-    _aptController.clear();
-
-    setState(() {
-      _currentCardIndex = index;
-      _selectedRecebimento = null;
-      _selectedQuemRecebeu = null;
-      _isLockerCorreio = false;
-      _isButtonEnabled = false;
-      _assinaturaColetadaLocal = false;
-      _horaAtual = DateFormat('HH:mm').format(DateTime.now());
-    });
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _buildSuccessModal(),
-    );
+  void _ensureAudioPlayer() {
+    // agora _audioPlayer é final e inicializado na declaração, nada a fazer
   }
 
-  Widget _buildSuccessModal() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(20),
-          topRight: Radius.circular(20),
-        ),
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(20),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'CONFIRMAR ENTREGA',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              SizedBox(height: 20),
+  // Única função de modal: `_buildSuccessModal` definida abaixo
 
-              Text(
-                'Como foi entregue?',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-              SizedBox(height: 10),
+  // antigos controles removidos
 
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: _opcoesEntrega
-                    .map((opcao) => _buildOptionButton(opcao))
-                    .toList(),
-              ),
+  // _finalizeDelivery removido (não referenciado)
 
-              if (_isLockerCorreio && _selectedRecebimento != null)
-                Column(
-                  children: [
-                    SizedBox(height: 20),
-                    Text(
-                      'Quem recebeu no $_selectedRecebimento?',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    SizedBox(height: 10),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: _opcoesLockerCorreio
-                          .map((opcao) => _buildSecondaryOption(opcao))
-                          .toList(),
-                    ),
-                  ],
-                ),
+  // removed unused helper that built WhatsApp message
 
-              if (!_isLockerCorreio && _selectedRecebimento != null)
-                Column(
-                  children: [
-                    SizedBox(height: 20),
-                    TextField(
-                      controller: _nomeController,
-                      decoration: InputDecoration(
-                        labelText: 'Nome de quem recebeu',
-                        border: OutlineInputBorder(),
-                        filled: true,
-                        fillColor: Colors.grey[100],
-                      ),
-                      onChanged: (_) => _checkCompletion(),
-                    ),
-                    SizedBox(height: 15),
-                    TextField(
-                      controller: _aptController,
-                      decoration: InputDecoration(
-                        labelText: 'Apartamento',
-                        border: OutlineInputBorder(),
-                        filled: true,
-                        fillColor: Colors.grey[100],
-                      ),
-                      onChanged: (_) => _checkCompletion(),
-                    ),
-                    SizedBox(height: 15),
-                    ElevatedButton.icon(
-                      onPressed: () => _collectSignature(),
-                      icon: Icon(Icons.draw),
-                      label: Text('COLHER ASSINATURA'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue[700],
-                        foregroundColor: Colors.white,
-                        minimumSize: Size(double.infinity, 50),
-                      ),
-                    ),
-                    if (_assinaturaColetadaLocal)
-                      Padding(
-                        padding: EdgeInsets.only(top: 10),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.check_circle, color: Colors.green),
-                            SizedBox(width: 8),
-                            Text(
-                              'Assinatura coletada',
-                              style: TextStyle(
-                                color: Colors.green,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-
-              SizedBox(height: 30),
-
-              ElevatedButton(
-                onPressed: _isButtonEnabled ? _finalizeDelivery : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isButtonEnabled
-                      ? Colors.green[700]
-                      : Colors.grey[400],
-                  foregroundColor: Colors.white,
-                  minimumSize: Size(double.infinity, 56),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: Text(
-                  'ENVIAR PARA GESTOR',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOptionButton(String text) {
-    return ChoiceChip(
-      label: Text(text),
-      selected: _selectedRecebimento == text,
-      onSelected: (selected) {
-        setState(() {
-          _selectedRecebimento = text;
-          _isLockerCorreio = (text == 'LOCKER' || text == 'CORREIO');
-          _selectedQuemRecebeu = null; // reset
-          _checkCompletion();
-        });
-      },
-      selectedColor: Colors.blue[100],
-      labelStyle: TextStyle(
-        color: _selectedRecebimento == text ? Colors.blue[900] : Colors.black,
-        fontWeight: _selectedRecebimento == text
-            ? FontWeight.bold
-            : FontWeight.normal,
-      ),
-    );
-  }
-
-  Widget _buildSecondaryOption(String text) {
-    return ChoiceChip(
-      label: Text(text),
-      selected: _selectedQuemRecebeu == text,
-      onSelected: (selected) {
-        setState(() {
-          _selectedQuemRecebeu = text;
-          _checkCompletion();
-        });
-      },
-      selectedColor: Colors.green[100],
-      labelStyle: TextStyle(
-        color: _selectedQuemRecebeu == text ? Colors.green[900] : Colors.black,
-        fontWeight: _selectedQuemRecebeu == text
-            ? FontWeight.bold
-            : FontWeight.normal,
-      ),
-    );
-  }
-
-  void _checkCompletion() {
-    if (_isLockerCorreio) {
-      setState(() {
-        _isButtonEnabled = _selectedQuemRecebeu != null;
-      });
-    } else {
-      setState(() {
-        _isButtonEnabled =
-            _selectedRecebimento != null &&
-            _nomeController.text.isNotEmpty &&
-            _aptController.text.isNotEmpty &&
-            _assinaturaColetadaLocal;
-      });
-    }
-  }
-
-  void _collectSignature() async {
-    // Simulação simples de coleta de assinatura
-    setState(() {
-      _assinaturaColetadaLocal = true;
-    });
-
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Assinatura coletada com sucesso')));
-    _checkCompletion();
-  }
-
-  void _finalizeDelivery() async {
+  // Novas funções de áudio conforme especificação
+  Future<void> _tocarSomFalha() async {
     try {
-      if (_currentCardIndex < 0 || _currentCardIndex >= entregas.length) return;
-      String message = _buildWhatsAppMessage();
-      String encodedMessage = Uri.encodeComponent(message);
-      String whatsappUrl = 'https://wa.me/5548996525008?text=$encodedMessage';
-
-      if (await canLaunchUrl(Uri.parse(whatsappUrl))) {
-        await launchUrl(
-          Uri.parse(whatsappUrl),
-          mode: LaunchMode.externalApplication,
-        );
-        await Future.delayed(Duration(seconds: 2));
-
-        setState(() {
-          if (_currentCardIndex >= 0 && _currentCardIndex < entregas.length) {
-            entregas.removeAt(_currentCardIndex);
-          }
-        });
-
-        if (!mounted) return;
-        Navigator.pop(context);
-      } else {
-        throw 'Não foi possível abrir o WhatsApp';
-      }
-    } catch (e) {
-      debugPrint('Erro ao finalizar entrega: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Erro: $e')));
-      }
-    }
-  }
-
-  String _buildWhatsAppMessage() {
-    final card = entregas[_currentCardIndex];
-    if (_isLockerCorreio) {
-      return '''📦 *ENTREGA CONCLUÍDA*\n*Status:* Entregue no $_selectedRecebimento\n*Recebido por:* $_selectedQuemRecebeu\n*Cliente:* ${card['cliente']}\n*Endereço:* ${card['endereco']}\n*Motorista:* LEANDRO\n*Hora:* $_horaAtual''';
-    } else {
-      return '''📦 *ENTREGA CONCLUÍDA*\n*Status:* Entregue em mãos\n*Recebido por:* $_selectedRecebimento\n*Nome:* ${_nomeController.text}\n*Apto:* ${_aptController.text}\n*Cliente:* ${card['cliente']}\n*Endereço:* ${card['endereco']}\n*Motorista:* LEANDRO\n*Assinatura coletada:* ✅\n*Hora:* $_horaAtual''';
-    }
-  }
-
-  Future<void> _playMarioShort() async {
-    _ensureAudioPlayer();
-    try {
+      await _audioPlayer.setVolume(1.0);
       await _audioPlayer.stop();
-      await _audioPlayer.setReleaseMode(ReleaseMode.stop);
-      await _audioPlayer.play(AssetSource('mario.mp3'));
-      // garantir que toque por apenas 1 segundo
-      Future.delayed(Duration(seconds: 1), () async {
+      // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
+      // serem registrados em pubspec.yaml. Evite alterar esse caminho.
+      await _audioPlayer.play(AssetSource('audios/falha_3.mp3'));
+      Future.delayed(Duration(seconds: 3), () async {
         try {
           await _audioPlayer.stop();
-        } catch (e) {
-          // erro ignorado - remover logs de depuração
-        }
+        } catch (_) {}
       });
-    } catch (e) {
-      // erro ignorado - remover logs de depuração
-    }
+    } catch (_) {}
   }
 
-  Future<void> _playFinalOnceAndMaybeLoop() async {
-    _ensureAudioPlayer();
+  Future<void> _tocarSomSucesso() async {
     try {
+      await _audioPlayer.setVolume(1.0);
       await _audioPlayer.stop();
-      await _audioPlayer.setReleaseMode(ReleaseMode.stop);
-      _awaitStartChama = true;
-      await _audioPlayer.play(AssetSource('final.mp3'));
-    } catch (e) {
-      // erro ignorado - remover logs de depuração
-    }
+      // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
+      // serem registrados em pubspec.yaml. Evite alterar esse caminho.
+      await _audioPlayer.play(AssetSource('audios/sucesso.mp3'));
+    } catch (_) {}
   }
 
-  Future<void> _startChamaLoop() async {
-    _ensureAudioPlayer();
+  Future<void> _tocarSomRotaConcluida() async {
     try {
+      await _audioPlayer.setVolume(1.0);
+      await _audioPlayer.stop();
+      // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
+      // serem registrados em pubspec.yaml. Evite alterar esse caminho.
+      await _audioPlayer.play(AssetSource('audios/final.mp3'));
+    } catch (_) {}
+  }
+
+  // ignore: unused_element
+  Future<void> _tocarSomNovoPedido() async {
+    try {
+      await _audioPlayer.setVolume(1.0);
+      await _audioPlayer.stop();
+      // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
+      // serem registrados em pubspec.yaml. Evite alterar esse caminho.
+      await _audioPlayer.play(AssetSource('audios/chama.mp3'));
+      Future.delayed(Duration(seconds: 2), () async {
+        try {
+          await _audioPlayer.stop();
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
+  // Função que inicia loop do som de chamada (se ainda desejar loop contínuo)
+  Future<void> _startChamaLoop() async {
+    try {
+      await _audioPlayer.setVolume(1.0);
       await _audioPlayer.stop();
       await _audioPlayer.setReleaseMode(ReleaseMode.loop);
-      await _audioPlayer.play(AssetSource('chama.mp3'));
-      // estado interno removido
-    } catch (e) {
-      // erro ignorado - remover logs de depuração
-    }
+      // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
+      // serem registrados em pubspec.yaml. Evite alterar esse caminho.
+      await _audioPlayer.play(AssetSource('audios/chama.mp3'));
+    } catch (_) {}
   }
 
-  Future<void> _stopAnyAudio() async {
+  // Parar qualquer áudio em reprodução
+  Future<void> _pararAudio() async {
     try {
       _awaitStartChama = false;
       await _audioPlayer.stop();
-    } catch (e) {
-      // erro ignorado - remover logs de depuração
-    }
+      try {
+        await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+      } catch (_) {}
+    } catch (_) {}
   }
 
   // Envia relatório de falha para o gestor, toca som, remove o card e fecha modal
@@ -581,41 +323,38 @@ class RotaMotoristaState extends State<RotaMotorista>
     final hasPhoto = imagemFalha != null;
 
     final report =
-        '❌ *RELATÓRIO DE FALHA*\n'
-        'Status: Não Realizada\n'
-        'Motivo: $motivoFinal\n'
-        'Cliente: $cliente\n'
-        'Endereço: $endereco\n'
-        'Motorista: LEANDRO\n'
-        'Foto: ${hasPhoto ? '✅' : '❌'}\n'
-        'Hora: $hora';
+        '*Status:* Falha\n'
+        '*Motivo:* $motivoFinal\n'
+        '*Cliente:* $cliente\n'
+        '*Endereço:* $endereco\n'
+        '*Motorista:* $nomeMotorista\n'
+        '*Hora:* $hora';
 
-    final wa = Uri.parse(
-      'https://api.whatsapp.com/send?phone=$numeroGestor&text=${Uri.encodeComponent(report)}',
-    );
-
+    // Parar qualquer som de fundo antes de abrir app externo/compartilhar
     try {
-      if (await canLaunchUrl(wa)) {
-        await launchUrl(wa, mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      // ignorar falha ao abrir WhatsApp
-    }
-
-    // Tocar mario por 2s
-    try {
-      await _audioPlayer.play(AssetSource('mario.mp3'));
-      await Future.delayed(Duration(seconds: 2));
-      await _audioPlayer.stop();
-    } catch (e) {
-      // ignorar erro de áudio
-    }
-
-    // Parar qualquer som de fundo antes de remover
-    try {
-      await _stopAnyAudio();
+      await _pararAudio();
     } catch (e) {
       // ignorar
+    }
+
+    // Se existe foto, enviar via share_plus para permitir anexar arquivo (WhatsApp aceita via share)
+    try {
+      if (hasPhoto) {
+        final f = File(imagemFalha!);
+        if (await f.exists()) {
+          // Anexar arquivo + texto usando share_plus
+          // ignore: deprecated_member_use
+          await Share.shareXFiles([XFile(f.path)], text: report);
+        } else {
+          // fallback para abrir apenas mensagem por link
+          await _enviarWhatsApp(report, phone: numeroGestor);
+        }
+      } else {
+        // sem foto: abrir WhatsApp com texto
+        await _enviarWhatsApp(report, phone: numeroGestor);
+      }
+    } catch (e) {
+      // ignorar falha no compartilhamento
     }
 
     setState(() {
@@ -624,18 +363,19 @@ class RotaMotoristaState extends State<RotaMotorista>
       motivoFalhaSelecionada = null;
     });
 
-    // Se não há mais entregas, parar qualquer loop de som
+    // Se não há mais entregas, tocar som de rota concluída
     if (entregas.isEmpty) {
       setState(() => _searchingActive = false);
       try {
-        await _stopAnyAudio();
+        await _tocarSomRotaConcluida();
       } catch (e) {
         // ignorar
       }
     }
 
     if (!mounted) return;
-    Navigator.of(context).pop();
+    final navigator = Navigator.of(context);
+    navigator.pop();
   }
 
   Future<void> _salvarMapaSelecionado(String mapName) async {
@@ -644,75 +384,303 @@ class RotaMotoristaState extends State<RotaMotorista>
     setState(() => _selectedMapName = mapName);
   }
 
-  Future<void> _abrirPreferenciasMapa() async {
-    // lista apps de mapa instalados usando map_launcher
-    final availableMaps = await MapLauncher.installedMaps;
-    if (!mounted) return;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.grey[900],
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Container(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
-                  child: Text(
-                    'Escolha o app de GPS',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+  // Única função de modal: abre o bottom sheet de sucesso
+  void _buildSuccessModal(BuildContext ctx, String nomeCliente) {
+    String? opcaoSelecionada;
+    String obsTexto = '';
+    XFile? pickedImageLocal;
+    final TextEditingController moradorController = TextEditingController();
+
+    // Abrir modal tipo AlertDialog para espelhar o visual do modal de Falha
+    showDialog(
+      context: ctx,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (dialogCtx2, setStateDialog) {
+            final String pickedPath = pickedImageLocal?.path ?? '';
+            final optionsSuccess = _opcoesEntrega
+                .where((o) => o != 'PRÓPRIO')
+                .toList();
+
+            return AlertDialog(
+              backgroundColor: Colors.grey[900],
+              title: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      'ENTREGA',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.left,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                ),
-                ...availableMaps.map((m) {
-                  final isSel = (_selectedMapName ?? '') == m.mapName;
-                  return ListTile(
-                    leading: Icon(Icons.map, color: Colors.white),
-                    title: Text(
-                      m.mapName,
-                      style: TextStyle(color: Colors.white),
-                    ),
-                    trailing: isSel
-                        ? Icon(Icons.check, color: Colors.green)
-                        : null,
-                    onTap: () {
-                      _salvarMapaSelecionado(m.mapName);
-                      Navigator.of(ctx).pop();
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Preferência salva: ${m.mapName}'),
-                        ),
-                      );
+                  IconButton(
+                    icon: Icon(Icons.camera_alt, color: Colors.white),
+                    onPressed: () async {
+                      final XFile? photo = await _tirarFoto();
+                      if (photo != null) {
+                        // armazenar em ambos os estados (pai e modal)
+                        setState(() {
+                          fotoEvidencia = photo;
+                          caminhoFotoSession = photo.path;
+                        });
+                        setStateDialog(() => pickedImageLocal = photo);
+                      }
                     },
-                  );
-                }),
-                ListTile(
-                  leading: Icon(Icons.close, color: Colors.white70),
-                  title: Text(
-                    'Cancelar',
-                    style: TextStyle(color: Colors.white70),
                   ),
-                  onTap: () => Navigator.of(ctx).pop(),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: SizedBox(
+                  width: MediaQuery.of(context).size.width * 0.9,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Sem placeholder de foto central (apenas câmera no canto superior direito)
+
+                      // Seletor de opções (grid 2 colunas) com padding idêntico
+                      GridView.count(
+                        crossAxisCount: 2,
+                        mainAxisSpacing: 10,
+                        crossAxisSpacing: 10,
+                        childAspectRatio: 2.1,
+                        shrinkWrap: true,
+                        physics: NeverScrollableScrollPhysics(),
+                        children: optionsSuccess.map((opcao) {
+                          final bool isSel = opcaoSelecionada == opcao;
+                          return ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isSel
+                                  ? Colors.green
+                                  : Colors.grey[800],
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                            ),
+                            onPressed: () {
+                              setStateDialog(() => opcaoSelecionada = opcao);
+                              setState(() => opcaoSelecionada = opcao);
+                            },
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 4),
+                              child: Text(
+                                opcao,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontSize: 12, height: 1.1),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+
+                      SizedBox(height: 12),
+
+                      // Campo Nome removido — usar Observações para Nome
+
+                      // Campo adicional para MORADOR: digitar número (oculto por padrão)
+                      if (opcaoSelecionada == 'MORADOR') ...[
+                        Row(
+                          children: [
+                            SizedBox(
+                              width: 120,
+                              child: TextField(
+                                controller: moradorController,
+                                keyboardType: TextInputType.phone,
+                                style: TextStyle(color: Colors.white),
+                                decoration: InputDecoration(
+                                  hintText: 'Nº',
+                                  hintStyle: TextStyle(color: Colors.white54),
+                                  filled: true,
+                                  fillColor: Colors.grey[800],
+                                  contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 8,
+                                  ),
+                                ),
+                                onChanged: (_) => setStateDialog(() {}),
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(child: SizedBox()),
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                      ],
+
+                      // Botão ENVIAR foi movido para abaixo das Observações.
+                      SizedBox(height: 8),
+
+                      // Observações (usado como Nome agora)
+                      TextField(
+                        decoration: InputDecoration(
+                          labelText: 'Nome / Observações',
+                          filled: true,
+                          fillColor: Colors.white10,
+                          border: OutlineInputBorder(),
+                          labelStyle: TextStyle(color: Colors.white70),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                        ),
+                        style: TextStyle(color: Colors.white),
+                        onChanged: (v) => setStateDialog(() => obsTexto = v),
+                        maxLines: 1,
+                      ),
+
+                      SizedBox(height: 12),
+
+                      // Botão ENVIAR agora abaixo das Observações
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                ((opcaoSelecionada != null) ||
+                                    (obsTexto.trim().length >= 3))
+                                ? Colors.green
+                                : Colors.grey[700],
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            textStyle: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(28),
+                            ),
+                          ),
+                          onPressed:
+                              ((opcaoSelecionada != null) ||
+                                  (obsTexto.trim().length >= 3))
+                              ? () async {
+                                  // Monta 'recebidoPor' conforme regras:
+                                  // *Recebido por:* [OPCAO] [CONTEUDO_OBSERVACOES] ([CONTEUDO_Nº])
+                                  String recebidoPor = '-';
+                                  final nomeTxt = obsTexto.trim();
+                                  final numTxt = moradorController.text.trim();
+                                  if (opcaoSelecionada != null) {
+                                    if (opcaoSelecionada == 'MORADOR') {
+                                      if (nomeTxt.isNotEmpty &&
+                                          numTxt.isNotEmpty) {
+                                        recebidoPor =
+                                            '${opcaoSelecionada!} $nomeTxt ($numTxt)';
+                                      } else if (nomeTxt.isNotEmpty) {
+                                        recebidoPor =
+                                            '${opcaoSelecionada!} $nomeTxt';
+                                      } else if (numTxt.isNotEmpty) {
+                                        recebidoPor =
+                                            '${opcaoSelecionada!} ($numTxt)';
+                                      } else {
+                                        recebidoPor = opcaoSelecionada!;
+                                      }
+                                    } else {
+                                      recebidoPor = nomeTxt.isNotEmpty
+                                          ? '${opcaoSelecionada!} $nomeTxt'
+                                          : opcaoSelecionada!;
+                                    }
+                                  } else {
+                                    recebidoPor = nomeTxt.isNotEmpty
+                                        ? nomeTxt
+                                        : '-';
+                                  }
+
+                                  try {
+                                    await _audioPlayer.setVolume(1.0);
+                                    await _audioPlayer.play(
+                                      AssetSource('audios/sucesso.mp3'),
+                                    );
+                                  } catch (_) {}
+                                  await Future.delayed(
+                                    Duration(milliseconds: 500),
+                                  );
+
+                                  final hora = DateFormat(
+                                    'HH:mm',
+                                  ).format(DateTime.now());
+                                  final enderecoCliente = entregas.firstWhere(
+                                    (e) => (e['cliente'] ?? '') == nomeCliente,
+                                    orElse: () => {'endereco': ''},
+                                  )['endereco'];
+
+                                  final mensagem =
+                                      '*Status:* Sucesso\n'
+                                      '*Recebido por:* $recebidoPor\n'
+                                      '*Cliente:* $nomeCliente | *Endereço:* ${enderecoCliente ?? ''} | *Motorista:* $nomeMotorista | *Hora:* $hora';
+
+                                  // anexar foto se existente (capturada aqui ou em sessão)
+                                  final List<XFile> files = [];
+                                  try {
+                                    final String? pickedPathLocal =
+                                        pickedImageLocal?.path;
+                                    if (pickedPathLocal != null) {
+                                      if (await File(pickedPathLocal).exists())
+                                        files.add(XFile(pickedPathLocal));
+                                    } else {
+                                      final String? fotoPath =
+                                          fotoEvidencia?.path ??
+                                          caminhoFotoSession;
+                                      if (fotoPath != null) {
+                                        if (await File(fotoPath).exists())
+                                          files.add(XFile(fotoPath));
+                                      }
+                                    }
+                                  } catch (_) {}
+
+                                  try {
+                                    if (files.isNotEmpty) {
+                                      // ignore: deprecated_member_use
+                                      await Share.shareXFiles(
+                                        files,
+                                        text: mensagem,
+                                      );
+                                    } else {
+                                      await _enviarWhatsApp(
+                                        mensagem,
+                                        phone: numeroGestor,
+                                      );
+                                    }
+                                  } catch (_) {}
+
+                                  final idx = entregas.indexWhere(
+                                    (e) => (e['cliente'] ?? '') == nomeCliente,
+                                  );
+                                  if (idx != -1) {
+                                    setState(() {
+                                      entregas.removeAt(idx);
+                                      _atualizarContadores();
+                                      fotoEvidencia = null;
+                                      caminhoFotoSession = null;
+                                    });
+                                  }
+
+                                  if (entregas.isEmpty) {
+                                    try {
+                                      await _tocarSomRotaConcluida();
+                                    } catch (_) {}
+                                  }
+
+                                  if (!mounted) return;
+                                  Navigator.of(dialogCtx).pop();
+                                }
+                              : null,
+                          child: Text('ENVIAR PARA GESTOR'),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
   }
 
   Future<void> _abrirMapaComPreferencia(String endereco) async {
-    if (endereco.trim().isEmpty) return;
     final encoded = Uri.encodeComponent(endereco);
     final prefs = await SharedPreferences.getInstance();
     final sel = prefs.getString(prefSelectedMapKey) ?? '';
@@ -732,57 +700,19 @@ class RotaMotoristaState extends State<RotaMotorista>
         'https://www.google.com/maps/search/?api=1&query=$encoded',
       );
     } else {
-      // sem preferência: abrir lista de apps instalados se possível
+      // sem preferência: tentar abrir primeiro app instalado ou fallback web
       final available = await MapLauncher.installedMaps;
       if (available.isNotEmpty) {
-        if (!mounted) return;
-        // ignore: use_build_context_synchronously
-        showModalBottomSheet(
-          context: context,
-          backgroundColor: Colors.grey[900],
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-          ),
-          builder: (ctx) {
-            return SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: available.map((m) {
-                  return ListTile(
-                    leading: Icon(Icons.map, color: Colors.white),
-                    title: Text(
-                      m.mapName,
-                      style: TextStyle(color: Colors.white),
-                    ),
-                    onTap: () {
-                      Navigator.of(ctx).pop();
-                      // usar esquema do app selecionado localmente
-                      if (m.mapName.toLowerCase().contains('waze')) {
-                        launchUrl(
-                          Uri.parse('waze://?q=$encoded'),
-                          mode: LaunchMode.externalApplication,
-                        );
-                      } else if (m.mapName.toLowerCase().contains('google')) {
-                        launchUrl(
-                          Uri.parse('comgooglemaps://?q=$encoded'),
-                          mode: LaunchMode.externalApplication,
-                        );
-                      } else {
-                        launchUrl(
-                          Uri.parse(
-                            'https://www.google.com/maps/search/?api=1&query=$encoded',
-                          ),
-                          mode: LaunchMode.externalApplication,
-                        );
-                      }
-                    },
-                  );
-                }).toList(),
-              ),
-            );
-          },
-        );
-        return;
+        final m = available.first;
+        if (m.mapName.toLowerCase().contains('waze')) {
+          uriToLaunch = Uri.parse('waze://?q=$encoded');
+        } else if (m.mapName.toLowerCase().contains('google')) {
+          uriToLaunch = Uri.parse('comgooglemaps://?q=$encoded');
+        } else {
+          uriToLaunch = Uri.parse(
+            'https://www.google.com/maps/search/?api=1&query=$encoded',
+          );
+        }
       } else {
         uriToLaunch = Uri.parse(
           'https://www.google.com/maps/search/?api=1&query=$encoded',
@@ -804,6 +734,46 @@ class RotaMotoristaState extends State<RotaMotorista>
     }
   }
 
+  Future<void> _abrirPreferenciasMapa() async {
+    try {
+      final available = await MapLauncher.installedMaps;
+      if (!mounted) return;
+
+      showModalBottomSheet(
+        context: context,
+        builder: (ctx) {
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  title: Text('Usar mapa web (Google Maps)'),
+                  onTap: () {
+                    _salvarMapaSelecionado('google_maps');
+                    Navigator.of(ctx).pop();
+                  },
+                ),
+                ...available.map((m) {
+                  return ListTile(
+                    leading: Icon(Icons.map),
+                    title: Text(m.mapName),
+                    onTap: () {
+                      _salvarMapaSelecionado(m.mapName);
+                      Navigator.of(ctx).pop();
+                    },
+                  );
+                }),
+              ],
+            ),
+          );
+        },
+      );
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // ignore: unused_element
   String _buildLinkParaWhatsApp(String endereco) {
     final encoded = Uri.encodeComponent(endereco);
     if ((_selectedMapName ?? '').toLowerCase().contains('waze')) {
@@ -867,6 +837,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Função `_finalizarEntrega` removida (não referenciada)
 
   // Compartilha foto + assinatura + texto via Share.shareXFiles
+  // ignore: unused_element
   Future<void> _compartilharRelatorio(int index, String nomeRecebedor) async {
     if (index < 0 || index >= entregas.length) return;
     final item = Map<String, String>.from(entregas[index]);
@@ -899,11 +870,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         }
       }
 
-      if (caminhoAssinaturaSession != null) {
-        if (await File(caminhoAssinaturaSession!).exists()) {
-          files.add(XFile(caminhoAssinaturaSession!));
-        }
-      }
+      // signature file removed from sharing flow
     } catch (e) {
       // erro ignorado - remover logs de depuração
     }
@@ -911,7 +878,6 @@ class RotaMotoristaState extends State<RotaMotorista>
     // snapshots antes de limpar
     final snapshotPhoto = fotoEvidencia;
     final snapshotCaminhoFoto = caminhoFotoSession;
-    final snapshotCaminhoAssinatura = caminhoAssinaturaSession;
 
     // remover item imediatamente para o próximo card subir
     setState(() {
@@ -919,16 +885,16 @@ class RotaMotoristaState extends State<RotaMotorista>
       _atualizarContadores();
       fotoEvidencia = null;
       caminhoFotoSession = null;
-      caminhoAssinaturaSession = null;
     });
 
     HapticFeedback.lightImpact();
 
-    // tocar mario curto (trava de ~1s já implementada em _playMarioShort)
+    // tocar som de sucesso curto
     try {
-      await _playMarioShort();
+      await _tocarSomSucesso();
+      await Future.delayed(Duration(milliseconds: 500));
     } catch (e) {
-      // erro ignorado - remover logs de depuração
+      // erro ignorado
     }
 
     // compartilhar (texto em linhas separadas)
@@ -947,25 +913,38 @@ class RotaMotoristaState extends State<RotaMotorista>
       'Sucesso',
       photo: snapshotPhoto,
       caminhoFotoSess: snapshotCaminhoFoto,
-      caminhoAssinaturaSess: snapshotCaminhoAssinatura,
+      caminhoAssinaturaSess: null,
     );
 
     // comportamento pós-remocao
     if (entregas.isEmpty) {
-      setState(() => _searchingActive = true);
       HapticFeedback.heavyImpact();
       try {
-        await _playFinalOnceAndMaybeLoop();
+        await _tocarSomRotaConcluida();
       } catch (e) {
-        // erro ignorado - remover logs de depuração
+        // erro ignorado
       }
     } else {
       if (_searchingActive) setState(() => _searchingActive = false);
       try {
-        await _stopAnyAudio();
+        await _pararAudio();
       } catch (e) {
-        // erro ignorado - remover logs de depuração
+        // erro ignorado
       }
+    }
+  }
+
+  // Abre a câmera e retorna a foto (ou null). Centraliza o fluxo de captura.
+  Future<XFile?> _tirarFoto() async {
+    try {
+      final picker = ImagePicker();
+      final XFile? photo = await picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 70,
+      );
+      return photo;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -1070,37 +1049,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 ),
               ),
             ),
-            ListTile(
-              leading: Icon(
-                Icons.history,
-                color: modoDia ? Colors.black87 : Colors.white70,
-              ),
-              title: Text(
-                'Histórico',
-                style: TextStyle(color: modoDia ? Colors.black : Colors.white),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (ctx) => HistoricoAtividades(
-                      historico: historicoEntregas,
-                      onResend: (entry) async {
-                        final cliente = entry.nomeCliente;
-                        final horario = entry.horario;
-                        final status = entry.status;
-                        final motivo = entry.motivo;
-                        final link = _buildLinkParaWhatsApp('');
-                        final mensagem =
-                            '*Relatório Reenviado* $status - $cliente ⏰ $horario${motivo != null ? ' - Motivo: $motivo' : ''} Link: $link';
-                        await _enviarWhatsApp(mensagem, phone: numeroGestor);
-                      },
-                    ),
-                  ),
-                );
-              },
-            ),
+            SizedBox.shrink(),
             ListTile(
               leading: Icon(
                 Icons.light_mode,
@@ -1460,6 +1409,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 motivoFalhaSelecionada = null;
                               });
 
+                              // Tocar som de falha ao abrir o modal
+                              _tocarSomFalha();
+
                               showDialog(
                                 context: context,
                                 builder: (ctx) {
@@ -1492,37 +1444,20 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                 Icons.camera_alt,
                                                 color: Colors.white,
                                               ),
-                                              onPressed:
-                                                  motivoSelecionadoLocal == null
-                                                  ? null
-                                                  : () async {
-                                                      final picker =
-                                                          ImagePicker();
-                                                      try {
-                                                        final XFile?
-                                                        photo = await picker
-                                                            .pickImage(
-                                                              source:
-                                                                  ImageSource
-                                                                      .camera,
-                                                              imageQuality: 70,
-                                                            );
-                                                        if (photo != null) {
-                                                          // armazenar caminho em estado pai e local
-                                                          setState(() {
-                                                            imagemFalha =
-                                                                photo.path;
-                                                          });
-                                                          setStateDialog(
-                                                            () =>
-                                                                pickedImageLocal =
-                                                                    photo,
-                                                          );
-                                                        }
-                                                      } catch (e) {
-                                                        // falha ao abrir/capturar, apenas ignore
-                                                      }
-                                                    },
+                                              onPressed: () async {
+                                                // centraliza a captura em _tirarFoto()
+                                                final XFile? photo =
+                                                    await _tirarFoto();
+                                                if (photo != null) {
+                                                  setState(() {
+                                                    imagemFalha = photo.path;
+                                                  });
+                                                  setStateDialog(
+                                                    () => pickedImageLocal =
+                                                        photo,
+                                                  );
+                                                }
+                                              },
                                             ),
                                           ],
                                         ),
@@ -1660,75 +1595,15 @@ class RotaMotoristaState extends State<RotaMotorista>
 
                                                 SizedBox(height: 8),
 
-                                                // Botão de captura: habilitado somente após motivo selecionado
-                                                SizedBox(
-                                                  width: double.infinity,
-                                                  child: ElevatedButton.icon(
-                                                    icon: Icon(
-                                                      Icons.camera_alt,
-                                                    ),
-                                                    label: Text(
-                                                      'TIRAR FOTO (EVIDÊNCIA)',
-                                                    ),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor:
-                                                          motivoSelecionadoLocal ==
-                                                              null
-                                                          ? Colors.grey[700]
-                                                          : Colors.orange[700],
-                                                      padding:
-                                                          EdgeInsets.symmetric(
-                                                            vertical: 14,
-                                                          ),
-                                                    ),
-                                                    onPressed:
-                                                        motivoSelecionadoLocal ==
-                                                            null
-                                                        ? null
-                                                        : () async {
-                                                            final picker =
-                                                                ImagePicker();
-                                                            try {
-                                                              final XFile?
-                                                              photo = await picker
-                                                                  .pickImage(
-                                                                    source: ImageSource
-                                                                        .camera,
-                                                                    imageQuality:
-                                                                        70,
-                                                                  );
-                                                              if (photo !=
-                                                                  null) {
-                                                                setState(() {
-                                                                  imagemFalha =
-                                                                      photo
-                                                                          .path;
-                                                                });
-                                                                setStateDialog(
-                                                                  () =>
-                                                                      pickedImageLocal =
-                                                                          photo,
-                                                                );
-                                                              }
-                                                            } catch (e) {
-                                                              // ignore
-                                                            }
-                                                          },
-                                                  ),
-                                                ),
-
-                                                SizedBox(height: 12),
-
-                                                // Botão ENVIAR NOTIFICAÇÃO (habilitado apenas quando motivo e imagem presentes)
+                                                // Substituído o botão de foto pelo botão de envio
+                                                // O botão permanece travado até que um motivo seja selecionado
                                                 SizedBox(
                                                   width: double.infinity,
                                                   child: ElevatedButton(
                                                     style: ElevatedButton.styleFrom(
                                                       backgroundColor:
                                                           (motivoSelecionadoLocal !=
-                                                                  null &&
-                                                              imagemFalha !=
-                                                                  null)
+                                                              null)
                                                           ? Colors.red
                                                           : Colors.grey[700],
                                                       padding:
@@ -1743,8 +1618,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                     ),
                                                     onPressed:
                                                         (motivoSelecionadoLocal !=
-                                                                null &&
-                                                            imagemFalha != null)
+                                                            null)
                                                         ? () async {
                                                             final motivoFinal =
                                                                 motivoSelecionadoLocal ==
@@ -1759,6 +1633,27 @@ class RotaMotoristaState extends State<RotaMotorista>
 
                                                             final card =
                                                                 entregas[index];
+                                                            try {
+                                                              try {
+                                                                await _audioPlayer
+                                                                    .setVolume(
+                                                                      1.0,
+                                                                    );
+                                                                // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
+                                                                // serem registrados em pubspec.yaml. Evite alterar esse caminho.
+                                                                await _audioPlayer.play(
+                                                                  AssetSource(
+                                                                    'audios/falha_3.mp3',
+                                                                  ),
+                                                                );
+                                                              } catch (_) {}
+                                                              await Future.delayed(
+                                                                Duration(
+                                                                  milliseconds:
+                                                                      500,
+                                                                ),
+                                                              );
+                                                            } catch (_) {}
                                                             await _enviarFalha(
                                                               card['id'] ?? '',
                                                               card['cliente'] ??
@@ -1805,380 +1700,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                               ),
                               minimumSize: Size(80, 48),
                             ),
-                            onPressed: () {
-                              final TextEditingController nameController =
-                                  TextEditingController();
-                              final TextEditingController aptController =
-                                  TextEditingController();
-                              String? selectedRole;
-
-                              showDialog(
-                                context: context,
-                                builder: (ctx) {
-                                  final roles = [
-                                    'Zelador(a)',
-                                    'Porteiro(a)',
-                                    'Faxineira(a)',
-                                    'Síndico(a)',
-                                    'Correio',
-                                    'Locker',
-                                    'Morador(a)',
-                                    'Vizinho(a)',
-                                  ];
-                                  final screenW = MediaQuery.of(
-                                    context,
-                                  ).size.width;
-                                  return StatefulBuilder(
-                                    builder: (ctx2, setStateDialog) {
-                                      return AlertDialog(
-                                        backgroundColor: Colors.grey[900],
-                                        title: Text(
-                                          'Contato via WhatsApp',
-                                          style: TextStyle(color: Colors.white),
-                                        ),
-                                        content: SingleChildScrollView(
-                                          child: SizedBox(
-                                            width: screenW * 0.9,
-                                            // height adaptável, preferível evitar hard fix height
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.stretch,
-                                              children: [
-                                                TextField(
-                                                  controller: nameController,
-                                                  style: TextStyle(
-                                                    color: Colors.white,
-                                                  ),
-                                                  decoration: InputDecoration(
-                                                    hintText:
-                                                        'Digite o nome da pessoa',
-                                                    hintStyle: TextStyle(
-                                                      color: Colors.white54,
-                                                    ),
-                                                    filled: true,
-                                                    fillColor: Colors.grey[800],
-                                                  ),
-                                                ),
-                                                SizedBox(height: 12),
-                                                if (selectedRole ==
-                                                    'Morador(a)') ...[
-                                                  TextField(
-                                                    controller: aptController,
-                                                    style: TextStyle(
-                                                      color: Colors.white,
-                                                    ),
-                                                    decoration: InputDecoration(
-                                                      hintText:
-                                                          'Nº do Apartamento',
-                                                      hintStyle: TextStyle(
-                                                        color: Colors.white54,
-                                                      ),
-                                                      filled: true,
-                                                      fillColor:
-                                                          Colors.grey[800],
-                                                    ),
-                                                  ),
-                                                  SizedBox(height: 12),
-                                                ],
-
-                                                GridView.count(
-                                                  crossAxisCount: 2,
-                                                  mainAxisSpacing: 10,
-                                                  crossAxisSpacing: 10,
-                                                  childAspectRatio: 2.5,
-                                                  shrinkWrap: true,
-                                                  physics:
-                                                      NeverScrollableScrollPhysics(),
-                                                  children: roles.map((role) {
-                                                    final bool isSel =
-                                                        selectedRole == role;
-                                                    return ElevatedButton(
-                                                      style: ElevatedButton.styleFrom(
-                                                        backgroundColor: isSel
-                                                            ? Colors.green
-                                                            : Colors.grey[800],
-                                                        foregroundColor:
-                                                            Colors.white,
-                                                        padding:
-                                                            EdgeInsets.symmetric(
-                                                              vertical: 14,
-                                                              horizontal: 20,
-                                                            ),
-                                                        textStyle: TextStyle(
-                                                          fontSize: 16,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                        ),
-                                                      ),
-                                                      onPressed: () {
-                                                        setStateDialog(
-                                                          () => selectedRole =
-                                                              role,
-                                                        );
-                                                      },
-                                                      child: Text(
-                                                        role,
-                                                        textAlign:
-                                                            TextAlign.center,
-                                                      ),
-                                                    );
-                                                  }).toList(),
-                                                ),
-
-                                                SizedBox(height: 20),
-                                                SizedBox(
-                                                  width: double.infinity,
-                                                  child: ElevatedButton(
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor:
-                                                          Colors.green,
-                                                      padding:
-                                                          EdgeInsets.symmetric(
-                                                            vertical: 16,
-                                                          ),
-                                                      textStyle: TextStyle(
-                                                        fontSize: 16,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                    onPressed: () async {
-                                                      if (selectedRole ==
-                                                          null) {
-                                                        ScaffoldMessenger.of(
-                                                          context,
-                                                        ).showSnackBar(
-                                                          SnackBar(
-                                                            content: Text(
-                                                              'Selecione um destinatário.',
-                                                            ),
-                                                          ),
-                                                        );
-                                                        return;
-                                                      }
-
-                                                      // Validações
-                                                      if (selectedRole ==
-                                                          'Morador(a)') {
-                                                        if (aptController.text
-                                                            .trim()
-                                                            .isEmpty) {
-                                                          ScaffoldMessenger.of(
-                                                            context,
-                                                          ).showSnackBar(
-                                                            SnackBar(
-                                                              content: Text(
-                                                                'Preencha o Nº do Apartamento.',
-                                                              ),
-                                                            ),
-                                                          );
-                                                          return;
-                                                        }
-                                                      }
-
-                                                      String recebedorPart;
-                                                      if (selectedRole ==
-                                                          'Morador(a)') {
-                                                        recebedorPart =
-                                                            'Morador(a) apto ${aptController.text.trim()} - ${nameController.text.trim()}';
-                                                      } else if (selectedRole ==
-                                                              'Locker' ||
-                                                          selectedRole ==
-                                                              'Correio') {
-                                                        recebedorPart =
-                                                            selectedRole!;
-                                                      } else {
-                                                        recebedorPart =
-                                                            '$selectedRole ${nameController.text.trim()}';
-                                                      }
-
-                                                      Navigator.of(ctx).pop();
-                                                      // Remover imediatamente, tocar efeitos e abrir WhatsApp;
-                                                      // histórico e salvamentos serão processados em background.
-                                                      _compartilharRelatorio(
-                                                        index,
-                                                        recebedorPart,
-                                                      );
-                                                    },
-                                                    child: Text(
-                                                      'ENVIAR NO WHATSAPP',
-                                                    ),
-                                                  ),
-                                                ),
-                                                SizedBox(height: 12),
-                                                SizedBox(
-                                                  width: double.infinity,
-                                                  child: assinaturaColetada
-                                                      ? ElevatedButton.icon(
-                                                          style:
-                                                              ElevatedButton.styleFrom(
-                                                                backgroundColor:
-                                                                    Colors
-                                                                        .green,
-                                                              ),
-                                                          icon: Icon(
-                                                            Icons.check_circle,
-                                                            color: Colors.white,
-                                                          ),
-                                                          label: Text(
-                                                            'Assinatura OK ✅',
-                                                          ),
-                                                          onPressed: null,
-                                                        )
-                                                      : OutlinedButton(
-                                                          style:
-                                                              OutlinedButton.styleFrom(
-                                                                side: BorderSide(
-                                                                  color: Colors
-                                                                      .cyan,
-                                                                ),
-                                                                foregroundColor:
-                                                                    Colors.cyan,
-                                                              ),
-                                                          child: Text(
-                                                            'Assinar Comprovante',
-                                                          ),
-                                                          onPressed: () {
-                                                            showModalBottomSheet(
-                                                              context: ctx2,
-                                                              isScrollControlled:
-                                                                  true,
-                                                              backgroundColor:
-                                                                  Colors
-                                                                      .transparent,
-                                                              builder: (ctxSign) {
-                                                                final screenH =
-                                                                    MediaQuery.of(
-                                                                      ctxSign,
-                                                                    ).size.height;
-                                                                return SafeArea(
-                                                                  bottom: true,
-                                                                  child: FractionallySizedBox(
-                                                                    heightFactor:
-                                                                        0.9,
-                                                                    child: Container(
-                                                                      decoration: BoxDecoration(
-                                                                        color: Colors
-                                                                            .white,
-                                                                        borderRadius: BorderRadius.vertical(
-                                                                          top: Radius.circular(
-                                                                            16,
-                                                                          ),
-                                                                        ),
-                                                                      ),
-                                                                      child: Column(
-                                                                        children: [
-                                                                          Expanded(
-                                                                            flex:
-                                                                                9,
-                                                                            child: Container(
-                                                                              color: Colors.white,
-                                                                              padding: EdgeInsets.all(
-                                                                                8,
-                                                                              ),
-                                                                              child: Signature(
-                                                                                controller: _signatureController,
-                                                                                backgroundColor: Colors.white,
-                                                                              ),
-                                                                            ),
-                                                                          ),
-                                                                          Container(
-                                                                            height:
-                                                                                (screenH *
-                                                                                        0.1)
-                                                                                    .clamp(
-                                                                                      64.0,
-                                                                                      120.0,
-                                                                                    ),
-                                                                            color:
-                                                                                Colors.grey[200],
-                                                                            padding: EdgeInsets.symmetric(
-                                                                              horizontal: 12,
-                                                                              vertical: 8,
-                                                                            ),
-                                                                            child: Row(
-                                                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                                                              children: [
-                                                                                TextButton(
-                                                                                  style: TextButton.styleFrom(
-                                                                                    backgroundColor: Colors.grey,
-                                                                                    foregroundColor: Colors.white,
-                                                                                  ),
-                                                                                  onPressed: () {
-                                                                                    _signatureController.clear();
-                                                                                    if (!mounted) return;
-                                                                                    Navigator.of(
-                                                                                      context,
-                                                                                    ).pop();
-                                                                                  },
-                                                                                  child: Text(
-                                                                                    'CANCELAR',
-                                                                                  ),
-                                                                                ),
-                                                                                ElevatedButton(
-                                                                                  style: ElevatedButton.styleFrom(
-                                                                                    backgroundColor: Colors.green,
-                                                                                  ),
-                                                                                  onPressed: () async {
-                                                                                    // exportar assinatura e salvar em arquivo temporário
-                                                                                    try {
-                                                                                      final data = await _signatureController.toPngBytes();
-                                                                                      if (data !=
-                                                                                          null) {
-                                                                                        final tmp = await getTemporaryDirectory();
-                                                                                        final dest = '${tmp.path}/assinatura_${DateTime.now().millisecondsSinceEpoch}.png';
-                                                                                        final f = File(
-                                                                                          dest,
-                                                                                        );
-                                                                                        await f.writeAsBytes(
-                                                                                          data,
-                                                                                        );
-                                                                                        caminhoAssinaturaSession = dest;
-                                                                                      }
-                                                                                    } catch (
-                                                                                      e
-                                                                                    ) {
-                                                                                      // ignorar falha na exportação
-                                                                                    }
-
-                                                                                    setState(
-                                                                                      () {
-                                                                                        assinaturaColetada = true;
-                                                                                      },
-                                                                                    );
-                                                                                    _signatureController.clear();
-                                                                                    if (!mounted) return;
-                                                                                    Navigator.of(
-                                                                                      context,
-                                                                                    ).pop();
-                                                                                  },
-                                                                                  child: Text(
-                                                                                    'CONFIRMAR ASSINATURA',
-                                                                                  ),
-                                                                                ),
-                                                                              ],
-                                                                            ),
-                                                                          ),
-                                                                        ],
-                                                                      ),
-                                                                    ),
-                                                                  ),
-                                                                );
-                                                              },
-                                                            );
-                                                          },
-                                                        ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                },
-                              );
-                            },
+                            onPressed: () => _buildSuccessModal(
+                              context,
+                              item['cliente'] ?? '',
+                            ),
                             child: Text('OK'),
                           ),
                         ),
@@ -2241,96 +1766,15 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   void _abrirModalEsquemasCores(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.55,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(25),
-            topRight: Radius.circular(25),
-          ),
-        ),
-        padding: EdgeInsets.only(top: 20, left: 20, right: 20, bottom: 25),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // CABEÇALHO COM TÍTULO
-              Center(
-                child: Column(
-                  children: [
-                    Text(
-                      'Escolha um esquema de cores',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Todas as cores dos cards serão alteradas juntas',
-                      style: TextStyle(color: Colors.grey[600], fontSize: 14),
-                    ),
-                  ],
-                ),
-              ),
-
-              SizedBox(height: 25),
-
-              // OPÇÃO 1
-              _buildOpcaoEsquema(
-                context: context,
-                titulo: 'Esquema 1',
-                subtitulo: 'Vermelho - Verde - Amarelo',
-                cores: [
-                  Colors.red[900]!,
-                  Colors.green[900]!,
-                  Colors.yellow[900]!,
-                ],
-                indice: 1,
-              ),
-
-              SizedBox(height: 16),
-
-              // OPÇÃO 2
-              _buildOpcaoEsquema(
-                context: context,
-                titulo: 'Esquema 2',
-                subtitulo: 'Azul Oceano - Verde Musgo - Azul Escuro',
-                cores: [
-                  Color(0xFF0077be),
-                  Color(0xFF8f9779),
-                  Color(0xFF00008b),
-                ],
-                indice: 2,
-              ),
-
-              SizedBox(height: 12),
-
-              // ESQUEMA 3
-              _buildOpcaoEsquema(
-                context: context,
-                titulo: 'Esquema 3',
-                subtitulo: 'Azul - Laranja - Lilás Fraco',
-                cores: [
-                  Colors.blue[700]!,
-                  Colors.orange[700]!,
-                  Color(0xFFD8BFD8),
-                ],
-                indice: 3,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    // Versão simplificada: alterna o esquema de cores e informa via SnackBar
+    setState(() => _esquemaCores = (_esquemaCores + 1) % 4);
+    final nome = _esquemaCores == 0 ? 'Padrão' : 'Esquema $_esquemaCores';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Esquema alterado: $nome')));
   }
 
+  // ignore: unused_element
   Widget _buildOpcaoEsquema({
     required BuildContext context,
     required String titulo,
