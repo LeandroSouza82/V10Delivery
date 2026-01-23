@@ -108,6 +108,70 @@ class RotaMotorista extends StatefulWidget {
 class RotaMotoristaState extends State<RotaMotorista>
     with SingleTickerProviderStateMixin {
   final String nomeMotorista = "LEANDRO";
+  String? _avatarPath;
+
+  Future<void> _pickAndSaveAvatar(ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final XFile? img = await picker.pickImage(
+        source: source,
+        imageQuality: 80,
+      );
+      if (img != null) {
+        setState(() => _avatarPath = img.path);
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('avatar_path', img.path);
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  void _showAvatarPickerOptions() {
+    final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
+    final Color textColor = modoDia ? Colors.black : Colors.white;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: bg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(Icons.camera_alt, color: textColor),
+                title: Text(
+                  'Tirar Foto (Câmera)',
+                  style: TextStyle(color: textColor),
+                ),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await _pickAndSaveAvatar(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.photo_library, color: textColor),
+                title: Text(
+                  'Escolher da Galeria',
+                  style: TextStyle(color: textColor),
+                ),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await _pickAndSaveAvatar(ImageSource.gallery);
+                },
+              ),
+              SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   // signature modal and related session path removed
   String? caminhoFotoSession;
   XFile? fotoEvidencia;
@@ -210,6 +274,19 @@ class RotaMotoristaState extends State<RotaMotorista>
       final mapName = prefs.getString(prefSelectedMapKey);
       if (mapName != null && mapName.isNotEmpty) {
         setState(() => _selectedMapName = mapName);
+      }
+      // Carregar avatar salvo (se houver)
+      final av = prefs.getString('avatar_path');
+      if (av != null && av.isNotEmpty) setState(() => _avatarPath = av);
+    });
+
+    // Carregar preferência de esquema de cores (modo_cores). Default = 1
+    SharedPreferences.getInstance().then((prefs) {
+      final modo = prefs.getInt('modo_cores');
+      if (modo != null) {
+        setState(() => _esquemaCores = modo);
+      } else {
+        setState(() => _esquemaCores = 1);
       }
     });
   }
@@ -402,8 +479,15 @@ class RotaMotoristaState extends State<RotaMotorista>
                 .where((o) => o != 'PRÓPRIO')
                 .toList();
 
+            final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
+            final Color textColor = modoDia ? Colors.black87 : Colors.white;
+            final Color secondary = modoDia ? Colors.black54 : Colors.white70;
+            final Color fillColor = modoDia
+                ? Colors.grey[200]!
+                : Colors.white10!;
+
             return AlertDialog(
-              backgroundColor: Colors.grey[900],
+              backgroundColor: bg,
               title: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -411,7 +495,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                     child: Text(
                       'ENTREGA',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: textColor,
                         fontWeight: FontWeight.bold,
                       ),
                       textAlign: TextAlign.left,
@@ -419,7 +503,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                     ),
                   ),
                   IconButton(
-                    icon: Icon(Icons.camera_alt, color: Colors.white),
+                    icon: Icon(Icons.camera_alt, color: textColor),
                     onPressed: () async {
                       final XFile? photo = await _tirarFoto();
                       if (photo != null) {
@@ -489,12 +573,12 @@ class RotaMotoristaState extends State<RotaMotorista>
                               child: TextField(
                                 controller: moradorController,
                                 keyboardType: TextInputType.phone,
-                                style: TextStyle(color: Colors.white),
+                                style: TextStyle(color: textColor),
                                 decoration: InputDecoration(
                                   hintText: 'Nº',
-                                  hintStyle: TextStyle(color: Colors.white54),
+                                  hintStyle: TextStyle(color: secondary),
                                   filled: true,
-                                  fillColor: Colors.grey[800],
+                                  fillColor: fillColor,
                                   contentPadding: EdgeInsets.symmetric(
                                     horizontal: 8,
                                     vertical: 8,
@@ -518,15 +602,15 @@ class RotaMotoristaState extends State<RotaMotorista>
                         decoration: InputDecoration(
                           labelText: 'Nome / Observações',
                           filled: true,
-                          fillColor: Colors.white10,
+                          fillColor: fillColor,
                           border: OutlineInputBorder(),
-                          labelStyle: TextStyle(color: Colors.white70),
+                          labelStyle: TextStyle(color: secondary),
                           contentPadding: EdgeInsets.symmetric(
                             horizontal: 12,
                             vertical: 8,
                           ),
                         ),
-                        style: TextStyle(color: Colors.white),
+                        style: TextStyle(color: textColor),
                         onChanged: (v) => setStateDialog(() => obsTexto = v),
                         maxLines: 1,
                       ),
@@ -692,8 +776,8 @@ class RotaMotoristaState extends State<RotaMotorista>
       uriToLaunch = Uri.parse('waze://?q=$encoded');
     } else if (sel.toLowerCase().contains('google') ||
         sel.toLowerCase().contains('maps')) {
-      // tentar esquema nativo do Google Maps
-      uriToLaunch = Uri.parse('comgooglemaps://?q=$encoded');
+      // usar esquema de navegação direta do Google Maps
+      uriToLaunch = Uri.parse('google.navigation:q=$encoded');
     } else if (sel.isNotEmpty) {
       // fallback genérico: tentar mapa web com busca
       uriToLaunch = Uri.parse(
@@ -999,21 +1083,21 @@ class RotaMotoristaState extends State<RotaMotorista>
                 children: [
                   // Card AZUL para Entregas
                   _buildIndicatorCard(
-                    color: Colors.blue[900]!,
+                    color: _getCorDoCard('entrega'),
                     icon: Icons.person,
                     count: entregasFaltam,
                     label: 'ENTREGAS',
                   ),
                   // Card LARANJA para Recolhas
                   _buildIndicatorCard(
-                    color: Colors.orange[900]!,
+                    color: _getCorDoCard('recolha'),
                     icon: Icons.inventory_2,
                     count: recolhasFaltam,
                     label: 'RECOLHA',
                   ),
                   // Card LILÁS para Outros
                   _buildIndicatorCard(
-                    color: Colors.purple[900]!,
+                    color: _getCorDoCard('outros'),
                     icon: Icons.more_horiz,
                     count: outrosFaltam,
                     label: 'OUTROS',
@@ -1028,37 +1112,67 @@ class RotaMotoristaState extends State<RotaMotorista>
         backgroundColor: modoDia ? Colors.grey[100] : Colors.black,
         child: Column(
           children: [
-            UserAccountsDrawerHeader(
+            DrawerHeader(
+              margin: EdgeInsets.zero,
+              padding: EdgeInsets.zero,
               decoration: BoxDecoration(
-                color: modoDia ? Colors.grey[300] : Colors.grey[900],
+                color: Colors.grey[900],
               ),
-              accountName: Text(
-                nomeMotorista,
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: modoDia ? Colors.black : Colors.white,
-                ),
-              ),
-              accountEmail: null,
-              currentAccountPicture: CircleAvatar(
-                backgroundColor: modoDia ? Colors.blue[200] : Colors.blue[700],
-                child: Icon(
-                  Icons.person,
-                  color: modoDia ? Colors.blue[900] : Colors.white,
+              child: Container(
+                width: double.infinity,
+                padding: EdgeInsets.only(top: 18, bottom: 12),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    GestureDetector(
+                      onTap: () async => _showAvatarPickerOptions(),
+                      child: Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                          color: modoDia ? Colors.blue[200] : Colors.blue[700],
+                          image: _avatarPath != null
+                              ? DecorationImage(
+                                  image: FileImage(File(_avatarPath!)),
+                                  fit: BoxFit.cover,
+                                )
+                              : null,
+                        ),
+                        child: _avatarPath == null
+                            ? Icon(
+                                Icons.person,
+                                color: modoDia ? Colors.blue[900] : Colors.white,
+                              )
+                            : null,
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      nomeMotorista,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
             SizedBox.shrink(),
             ListTile(
               leading: Icon(
-                Icons.light_mode,
+                Icons.wb_sunny,
                 color: modoDia ? Colors.black87 : Colors.white70,
               ),
               title: Text(
                 'Modo Dia',
                 style: TextStyle(color: modoDia ? Colors.black : Colors.white),
               ),
+              trailing: modoDia ? Icon(Icons.check, color: Colors.green) : null,
               onTap: () {
                 setState(() => modoDia = !modoDia);
                 Navigator.pop(context);
@@ -1066,11 +1180,11 @@ class RotaMotoristaState extends State<RotaMotorista>
             ),
             ListTile(
               leading: Icon(
-                Icons.color_lens,
-                color: modoDia ? Colors.black87 : Colors.white70,
+                Icons.palette,
+                color: Colors.red,
               ),
               title: Text(
-                'Trocar Cores dos Cards (3 temas)',
+                '🎨 Cores dos Cards',
                 style: TextStyle(color: modoDia ? Colors.black : Colors.white),
               ),
               onTap: () {
@@ -1080,13 +1194,37 @@ class RotaMotoristaState extends State<RotaMotorista>
             ),
             ListTile(
               leading: Icon(
-                Icons.map_outlined,
-                color: modoDia ? Colors.black87 : Colors.white70,
+                Icons.map,
+                color: modoDia ? Colors.green : Colors.blueAccent,
               ),
               title: Text(
                 'Configurar GPS',
                 style: TextStyle(color: modoDia ? Colors.black : Colors.white),
               ),
+              trailing:
+                  (_selectedMapName != null && _selectedMapName!.isNotEmpty)
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _selectedMapName!.toLowerCase().contains('waze')
+                              ? 'Waze'
+                              : (_selectedMapName!.toLowerCase().contains(
+                                      'google',
+                                    ) ||
+                                    _selectedMapName == 'google_maps')
+                              ? 'Google'
+                              : 'Mapa',
+                          style: TextStyle(
+                            color: modoDia ? Colors.black54 : Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                        SizedBox(width: 6),
+                        Icon(Icons.check, color: Colors.green, size: 18),
+                      ],
+                    )
+                  : null,
               onTap: () {
                 Navigator.pop(context);
                 _abrirPreferenciasMapa();
@@ -1098,11 +1236,47 @@ class RotaMotoristaState extends State<RotaMotorista>
               child: ListTile(
                 leading: Icon(Icons.exit_to_app, color: Colors.red),
                 title: Text('Sair', style: TextStyle(color: Colors.red)),
-                onTap: () {
+                onTap: () async {
+                  // Fechar o drawer antes de mostrar a confirmação
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text('Saindo (simulado)')));
+                  final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
+                  final Color textColor = modoDia ? Colors.black : Colors.white;
+
+                  showDialog(
+                    context: context,
+                    builder: (ctx) {
+                      return AlertDialog(
+                        backgroundColor: bg,
+                        content: Text(
+                          'Deseja realmente sair?',
+                          style: TextStyle(color: textColor),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            child: Text(
+                              'NÃO',
+                              style: TextStyle(color: textColor),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.of(ctx).pop();
+                              try {
+                                SystemNavigator.pop();
+                              } catch (_) {
+                                // fallback: nothing else to do here
+                              }
+                            },
+                            child: Text(
+                              'SIM',
+                              style: TextStyle(color: Colors.redAccent),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  );
                 },
               ),
             ),
@@ -1137,7 +1311,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                         color: Colors.white,
                       ),
                     ),
-                    SizedBox(height: 8),
+                    SizedBox(height: 6),
                     Text(
                       'Bom trabalho, Leandro!',
                       style: TextStyle(fontSize: 16, color: Colors.grey),
@@ -1244,7 +1418,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Numeração dinâmica + ID
+                    // Cabeçalho compacto: número e tipo na mesma linha
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
@@ -1266,31 +1440,65 @@ class RotaMotoristaState extends State<RotaMotorista>
                             ),
                           ),
                         ),
-                        // removed duplicate small ID text (kept main numbered circle)
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            item['tipo']!.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: modoDia ? Colors.black : Colors.white,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
 
-                    SizedBox(height: 8),
+                    SizedBox(height: 6),
 
-                    // TIPO (ENTREGA/RECOLHA/OUTROS)
+                    // CLIENTE e ENDEREÇO com hierarquia visual
+                    Text(
+                      'CLIENTE',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: modoDia ? Colors.grey[600] : Colors.grey[300],
+                      ),
+                    ),
+                    SizedBox(height: 6),
                     Container(
-                      alignment: Alignment.centerLeft,
-                      height: 32,
+                      width: double.infinity,
+                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black38,
+                            blurRadius: 5,
+                            offset: Offset(0, 3),
+                          ),
+                        ],
+                      ),
                       child: Text(
-                        item['tipo']!.toUpperCase(),
+                        item['cliente'] ?? '',
                         style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: modoDia ? Colors.black : Colors.white,
+                          color: Colors.black,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
-
-                    SizedBox(height: 4),
-
-                    // CLIENTE E ENDEREÇO
+                    SizedBox(height: 6),
                     Text(
-                      "CLIENTE: ${item['cliente']}",
+                      'ENDEREÇO',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: modoDia ? Colors.grey[600] : Colors.grey[300],
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      item['endereco'] ?? '',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
@@ -1298,34 +1506,30 @@ class RotaMotoristaState extends State<RotaMotorista>
                       ),
                     ),
 
-                    SizedBox(height: 2),
-
-                    Text(
-                      "ENDEREÇO: ${item['endereco']}",
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400,
-                        color: modoDia ? Colors.grey[700] : Colors.grey[300],
-                      ),
-                    ),
-
                     SizedBox(height: 8),
 
-                    // Mensagem do gestor (opaca) entre endereço e botões
+                    // Mensagem do gestor (Post-it) com fundo amarelo
                     if ((item['obs'] ?? '').isNotEmpty)
                       Container(
                         width: double.infinity,
                         padding: EdgeInsets.all(10),
                         margin: EdgeInsets.only(top: 6, bottom: 6),
                         decoration: BoxDecoration(
-                          color: modoDia ? Colors.black12 : Colors.white10,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                            color: Colors.yellow[600],
+                            borderRadius: BorderRadius.circular(8),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black38,
+                                blurRadius: 5,
+                                offset: Offset(0, 3),
+                              ),
+                            ],
+                          ),
                         child: Row(
                           children: [
                             Icon(
                               Icons.info_outline,
-                              color: modoDia ? Colors.black87 : Colors.white70,
+                              color: Colors.black,
                               size: 18,
                             ),
                             SizedBox(width: 8),
@@ -1333,7 +1537,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                               child: Text(
                                 item['obs'] ?? '',
                                 style: TextStyle(
-                                  color: Color(0xFFFFD700),
+                                  color: Colors.black,
                                   fontSize: 13,
                                 ),
                               ),
@@ -1348,7 +1552,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                     Row(
                       children: [
                         Expanded(
-                          child: ElevatedButton.icon(
+                          child: ElevatedButton(
                             style: ElevatedButton.styleFrom(
                               backgroundColor: modoDia
                                   ? Colors.blue[400]!
@@ -1358,17 +1562,16 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 vertical: 14,
                                 horizontal: 20,
                               ),
-                              minimumSize: Size(100, 48),
+                              minimumSize: Size(80, 48),
+                              textStyle: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
-                            icon: Icon(
-                              Icons.arrow_forward,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                            label: Text('MAPA'),
                             onPressed: () => _abrirMapaComPreferencia(
                               item['endereco'] ?? '',
                             ),
+                            child: Text('ROTA'),
                           ),
                         ),
 
@@ -1388,6 +1591,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 horizontal: 20,
                               ),
                               minimumSize: Size(80, 48),
+                              textStyle: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                             onPressed: () {
                               final TextEditingController
@@ -1427,8 +1634,21 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       final String pickedPath =
                                           pickedImageLocal?.path ?? '';
 
+                                      final Color bg = modoDia
+                                          ? Colors.white
+                                          : Colors.grey[900]!;
+                                      final Color textColor = modoDia
+                                          ? Colors.black87
+                                          : Colors.white;
+                                      final Color secondary = modoDia
+                                          ? Colors.black54
+                                          : Colors.white70;
+                                      final Color fillColor = modoDia
+                                          ? Colors.grey[200]!
+                                          : Colors.white10!;
+
                                       return AlertDialog(
-                                        backgroundColor: Colors.grey[900],
+                                        backgroundColor: bg,
                                         title: Row(
                                           mainAxisAlignment:
                                               MainAxisAlignment.spaceBetween,
@@ -1436,13 +1656,13 @@ class RotaMotoristaState extends State<RotaMotorista>
                                             Text(
                                               'Relatar Falha',
                                               style: TextStyle(
-                                                color: Colors.white,
+                                                color: textColor,
                                               ),
                                             ),
                                             IconButton(
                                               icon: Icon(
                                                 Icons.camera_alt,
-                                                color: Colors.white,
+                                                color: textColor,
                                               ),
                                               onPressed: () async {
                                                 // centraliza a captura em _tirarFoto()
@@ -1485,7 +1705,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                           BorderRadius.circular(
                                                             8,
                                                           ),
-                                                      color: Colors.grey[850],
+                                                      color: modoDia
+                                                          ? Colors.grey[100]
+                                                          : Colors.grey[850],
                                                       image:
                                                           pickedImageLocal !=
                                                               null
@@ -1503,8 +1725,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                         pickedImageLocal == null
                                                         ? Icon(
                                                             Icons.camera_alt,
-                                                            color:
-                                                                Colors.white54,
+                                                            color: secondary,
                                                             size: 36,
                                                           )
                                                         : null,
@@ -1563,6 +1784,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                           style: TextStyle(
                                                             fontSize: 12,
                                                             height: 1.1,
+                                                            color: Colors.white,
                                                           ),
                                                         ),
                                                       ),
@@ -1666,6 +1888,12 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                         : null,
                                                     child: Text(
                                                       'ENVIAR NOTIFICAÇÃO',
+                                                      style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight: modoDia
+                                                            ? FontWeight.bold
+                                                            : FontWeight.normal,
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
@@ -1699,6 +1927,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 horizontal: 20,
                               ),
                               minimumSize: Size(80, 48),
+                              textStyle: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                             onPressed: () => _buildSuccessModal(
                               context,
@@ -1766,12 +1998,95 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   void _abrirModalEsquemasCores(BuildContext context) {
-    // Versão simplificada: alterna o esquema de cores e informa via SnackBar
-    setState(() => _esquemaCores = (_esquemaCores + 1) % 4);
-    final nome = _esquemaCores == 0 ? 'Padrão' : 'Esquema $_esquemaCores';
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Esquema alterado: $nome')));
+    final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
+    final Color textColor = modoDia ? Colors.black : Colors.white;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: bg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(height: 8),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              SizedBox(height: 12),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Text(
+                      'Cores dos Cards',
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Spacer(),
+                  ],
+                ),
+              ),
+              SizedBox(height: 8),
+              ListTile(
+                title: Text('Padrão', style: TextStyle(color: textColor)),
+                onTap: () async {
+                  setState(() => _esquemaCores = 0);
+                  try {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setInt('modo_cores', 0);
+                  } catch (_) {}
+                  Navigator.of(ctx).pop();
+                },
+                trailing: _esquemaCores == 0
+                    ? Icon(Icons.check, color: Colors.green)
+                    : null,
+              ),
+              ListTile(
+                title: Text('Modo 1', style: TextStyle(color: textColor)),
+                onTap: () async {
+                  setState(() => _esquemaCores = 1);
+                  try {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setInt('modo_cores', 1);
+                  } catch (_) {}
+                  Navigator.of(ctx).pop();
+                },
+                trailing: _esquemaCores == 1
+                    ? Icon(Icons.check, color: Colors.green)
+                    : null,
+              ),
+              ListTile(
+                title: Text('Modo 2', style: TextStyle(color: textColor)),
+                onTap: () async {
+                  setState(() => _esquemaCores = 2);
+                  try {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setInt('modo_cores', 2);
+                  } catch (_) {}
+                  Navigator.of(ctx).pop();
+                },
+                trailing: _esquemaCores == 2
+                    ? Icon(Icons.check, color: Colors.green)
+                    : null,
+              ),
+              SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // ignore: unused_element
