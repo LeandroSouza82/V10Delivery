@@ -206,7 +206,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   bool modoDia = false;
   int _esquemaCores = 0; // 0 = padrão, 1/2/3 = esquemas
   // Busca e reconexão
-  
+
   Timer? _reconnectTimer;
   // Stream-based delivery list to reduce UI rebuild pressure
   final StreamController<List<dynamic>> _entregasController =
@@ -974,38 +974,26 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Carrega dados da tabela 'entregas' no Supabase e atualiza a lista local
   Future<void> carregarDados() async {
-    // Helper para carregar dados de teste (reutilizável)
-    List<Map<String, String>> dadosTeste() => [
-      {
-        'id': 't1',
-        'cliente': 'Cliente Teste 1',
-        'endereco': 'Rua Exemplo 1, 123',
-        'tipo': 'entrega',
-        'obs': 'Teste modo offline',
-      },
-      {
-        'id': 't2',
-        'cliente': 'Cliente Teste 2',
-        'endereco': 'Av. Modelo 20',
-        'tipo': 'recolha',
-        'obs': 'Teste modo offline',
-      },
-      {
-        'id': 't3',
-        'cliente': 'Cliente Teste 3',
-        'endereco': 'Praça Demo 5',
-        'tipo': 'outros',
-        'obs': 'Teste modo offline',
-      },
-    ];
-
-    // Se estiver em modo offline, carregar dados de teste locais
+    // Se estiver em modo offline, não usar dados fictícios; tentar usar cache local
     if (modoOffline) {
       if (!mounted) return;
-      setState(() {
-        entregas = dadosTeste();
+      try {
+        final cached = await CacheService().loadEntregas();
+        if (cached.isNotEmpty) {
+          final lista = cached.map<Map<String, String>>((m) {
+            return m.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+          }).toList();
+          _setEntregas(List<dynamic>.from(lista));
+          _atualizarContadores();
+        } else {
+          // sem cache: lista vazia
+          _setEntregas([]);
+          _atualizarContadores();
+        }
+      } catch (e) {
+        _setEntregas([]);
         _atualizarContadores();
-      });
+      }
       return;
     }
 
@@ -1031,7 +1019,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       // Tentar carregar cache local primeiro
       try {
         final cached = await CacheService().loadEntregas();
-          if (cached.isNotEmpty) {
+        if (cached.isNotEmpty) {
           final lista = cached.map<Map<String, String>>((m) {
             return m.map((k, v) => MapEntry(k, v?.toString() ?? ''));
           }).toList();
@@ -1042,18 +1030,14 @@ class RotaMotoristaState extends State<RotaMotorista>
           });
         } else {
           if (!mounted) return;
-          setState(() {
-            entregas = dadosTeste();
-            _atualizarContadores();
-          });
+          _setEntregas([]);
+          _atualizarContadores();
         }
       } catch (e) {
         debugPrint('Erro ao carregar cache: $e');
         if (!mounted) return;
-        setState(() {
-          entregas = dadosTeste();
-          _atualizarContadores();
-        });
+        _setEntregas([]);
+        _atualizarContadores();
       }
 
       // iniciar tentativas de reconexão periódicas
@@ -1113,11 +1097,10 @@ class RotaMotoristaState extends State<RotaMotorista>
           };
         }).toList();
 
-        setState(() {
-          entregas = List<dynamic>.from(lista);
-          _atualizarContadores();
-          modoOffline = false;
-        });
+        // Atualizar estado centralizado via _setEntregas para notificar stream/UI
+        _setEntregas(List<dynamic>.from(lista));
+        _atualizarContadores();
+        setState(() => modoOffline = false);
 
         // Salvar em cache local para uso offline (debounced)
         _saveToCacheDebounced(lista);
@@ -1128,10 +1111,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     } on SocketException catch (_) {
       if (!mounted) return;
       setState(() => modoOffline = true);
-      setState(() {
-        entregas = dadosTeste();
-        _atualizarContadores();
-      });
+      _setEntregas([]);
+      _atualizarContadores();
 
       _reconnectTimer?.cancel();
       _reconnectTimer = Timer.periodic(const Duration(seconds: 30), (t) async {
@@ -1147,10 +1128,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {
       if (!mounted) return;
       setState(() => modoOffline = true);
-      setState(() {
-        entregas = dadosTeste();
-        _atualizarContadores();
-      });
+      _setEntregas([]);
+      _atualizarContadores();
     }
   }
 
@@ -1671,8 +1650,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                       stream: _entregasController.stream,
                       initialData: entregas,
                       builder: (ctx, snap) {
-                        final listaAtual = snap.data ?? entregas;
-                        if (listaAtual.isEmpty) {
+                        final listaEntregas = snap.data ?? entregas;
+                        if (listaEntregas.isEmpty) {
                           return Center(
                             child: Text('Nenhuma entrega disponível'),
                           );
@@ -1685,21 +1664,21 @@ class RotaMotoristaState extends State<RotaMotorista>
                             color: Colors.transparent,
                             child: child,
                           ),
-                          itemCount: listaAtual.length,
+                          itemCount: listaEntregas.length,
                           onReorder: (old, newIdx) {
                             setState(() {
                               if (newIdx > old) newIdx -= 1;
-                              final item = listaAtual.removeAt(old);
-                              listaAtual.insert(newIdx, item);
+                              final item = listaEntregas.removeAt(old);
+                              listaEntregas.insert(newIdx, item);
                               // refletir mudança no estado centralizado
-                              _setEntregas(List<dynamic>.from(listaAtual));
+                              _setEntregas(List<dynamic>.from(listaEntregas));
                             });
                           },
                           itemBuilder: (context, index) =>
                               ReorderableDelayedDragStartListener(
-                                key: ValueKey(listaAtual[index]["id"]),
+                                key: ValueKey(listaEntregas[index]["id"]),
                                 index: index,
-                                child: _buildCard(listaAtual[index], index),
+                                child: _buildCard(listaEntregas[index], index),
                               ),
                         );
                       },
@@ -1718,8 +1697,8 @@ class RotaMotoristaState extends State<RotaMotorista>
 
     // Fixar cor da barra lateral conforme tipo (mantém indicador colorido)
     final corItem = tipoTratado.contains('entrega')
-      ? Colors.blue
-      : tipoTratado.contains('recolh')
+        ? Colors.blue
+        : tipoTratado.contains('recolh')
         ? Colors.orange
         : Colors.purple;
     final Color corBarra = corItem;
@@ -1835,10 +1814,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                     // CLIENTE e ENDEREÇO com hierarquia visual
                     Text(
                       'CLIENTE',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[700],
-                      ),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                     ),
                     SizedBox(height: 6),
                     // Cliente (remover caixa branca para manter estilo profissional)
