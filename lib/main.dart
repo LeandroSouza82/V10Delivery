@@ -15,6 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:internet_connection_checker/internet_connection_checker.dart';
 import 'package:retry/retry.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'services/cache_service.dart';
 // dotenv and wakelock removed: chaves agora hardcoded no main()
 
@@ -53,6 +54,8 @@ final List<ItemHistorico> historicoEntregas = [];
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Forçar orientação apenas em vertical (portrait)
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
   // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
@@ -258,6 +261,10 @@ class RotaMotoristaState extends State<RotaMotorista>
   void initState() {
     // iniciar cache service (não bloqueante)
     CacheService().init().catchError((e) => debugPrint('Cache init error: $e'));
+    // Manter a tela acesa enquanto o app estiver em primeiro plano
+    try {
+      WakelockPlus.enable();
+    } catch (_) {}
     super.initState();
     // Chamar carregarDados() primeiro para popular a lista vinda do Supabase
     carregarDados();
@@ -320,14 +327,17 @@ class RotaMotoristaState extends State<RotaMotorista>
         setState(() => modoOffline = true);
       }
     });
-    // Carregar dados iniciais do Supabase
-    carregarDados();
+    // Carregar dados iniciais do Supabase (chamado acima após inicialização)
 
     // Busca removida: não inicializar listener
   }
 
   @override
   void dispose() {
+    // Restaurar comportamento padrão de tela ao sair
+    try {
+      WakelockPlus.disable();
+    } catch (_) {}
     _buscarController.dispose();
     _audioPlayer.dispose();
     _nomeController.dispose();
@@ -1361,21 +1371,21 @@ class RotaMotoristaState extends State<RotaMotorista>
                 children: [
                   // Card AZUL para Entregas
                   _buildIndicatorCard(
-                    color: _getCorDoCard('entrega'),
+                    color: Colors.blue,
                     icon: Icons.person,
                     count: totalEntregas,
                     label: 'ENTREGAS',
                   ),
                   // Card LARANJA para Recolhas
                   _buildIndicatorCard(
-                    color: _getCorDoCard('recolha'),
+                    color: Colors.orange,
                     icon: Icons.inventory_2,
                     count: totalRecolhas,
                     label: 'RECOLHA',
                   ),
                   // Card LILÁS para Outros
                   _buildIndicatorCard(
-                    color: _getCorDoCard('outros'),
+                    color: Colors.deepPurpleAccent,
                     icon: Icons.more_horiz,
                     count: totalOutros,
                     label: 'OUTROS',
@@ -1386,7 +1396,7 @@ class RotaMotoristaState extends State<RotaMotorista>
           ),
         ),
       ),
-      drawer: Drawer(
+      endDrawer: Drawer(
         backgroundColor: modoDia ? Colors.grey[100] : Colors.black,
         child: Column(
           children: [
@@ -1760,10 +1770,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         Container(
-                          width: 40,
-                          height: 40,
+                          width: 32,
+                          height: 32,
                           decoration: BoxDecoration(
-                            color: Colors.blue[700],
+                            color: corBarra,
                             shape: BoxShape.circle,
                           ),
                           child: Center(
@@ -1817,12 +1827,12 @@ class RotaMotoristaState extends State<RotaMotorista>
                       style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                     ),
                     SizedBox(height: 6),
-                    // Cliente (remover caixa branca para manter estilo profissional)
+                    // Cliente (estilo fixo: preto, maior e em negrito)
                     Text(
                       item['cliente'] ?? '',
                       style: TextStyle(
-                        color: textPrimary,
-                        fontSize: 16,
+                        color: Colors.black87,
+                        fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -1840,6 +1850,50 @@ class RotaMotoristaState extends State<RotaMotorista>
                         color: textPrimary,
                       ),
                     ),
+
+                    // Indicação do tipo de serviço (ENTREGA / RECOLHA / OUTROS)
+                    SizedBox(height: 6),
+                    Text(
+                      (item['tipo'] ?? '').toString().toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: corBarra,
+                      ),
+                    ),
+
+                    // Observações/aviso do gestor (campo 'observacoes' específico)
+                    Builder(builder: (ctx) {
+                      final obs = (item['observacoes'] ?? '').toString().trim();
+                      if (obs.isEmpty) return SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: 'Obs: ',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                  color: Colors.redAccent,
+                                ),
+                              ),
+                              TextSpan(
+                                text: obs,
+                                style: TextStyle(
+                                  fontStyle: FontStyle.italic,
+                                  fontSize: 12,
+                                  color: Colors.redAccent,
+                                ),
+                              ),
+                            ],
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    }),
 
                     SizedBox(height: 8),
 
@@ -2485,64 +2539,6 @@ class RotaMotoristaState extends State<RotaMotorista>
         ),
       ),
     );
-  }
-
-  Color _getCorDoCard(String tipo) {
-    if (modoDia) {
-      // VERSÕES CLARAS
-      switch (_esquemaCores) {
-        case 1: // Esquema 1 claro
-          if (tipo == 'entrega') return Colors.red[100]!;
-          if (tipo == 'recolha') return Colors.green[100]!;
-          if (tipo == 'outros') return Colors.yellow[100]!;
-          break;
-
-        case 2: // Esquema 2 claro
-          if (tipo == 'entrega') return Color(0xFF87CEEB);
-          if (tipo == 'recolha') return Color(0xFF98FB98);
-          if (tipo == 'outros') return Color(0xFFB0C4DE);
-          break;
-
-        case 3: // NOVO: Esquema 3 claro (Azul, Laranja, Lilás fraco)
-          if (tipo == 'entrega') return Colors.blue[100]!;
-          if (tipo == 'recolha') return Colors.orange[100]!;
-          if (tipo == 'outros') return Color(0xFFF3E5F5); // Lilás muito fraco
-          break;
-
-        default: // Padrão claro
-          if (tipo == 'entrega') return Colors.blue[100]!;
-          if (tipo == 'recolha') return Colors.orange[100]!;
-          if (tipo == 'outros') return Colors.purple[100]!;
-      }
-      return Colors.grey[300]!;
-    } else {
-      // VERSÕES ESCURAS
-      switch (_esquemaCores) {
-        case 1:
-          if (tipo == 'entrega') return Colors.red[900]!;
-          if (tipo == 'recolha') return Colors.green[900]!;
-          if (tipo == 'outros') return Colors.yellow[900]!;
-          break;
-
-        case 2:
-          if (tipo == 'entrega') return Color(0xFF0077be);
-          if (tipo == 'recolha') return Color(0xFF8f9779);
-          if (tipo == 'outros') return Color(0xFF00008b);
-          break;
-
-        case 3: // NOVO: Esquema 3 escuro (Azul, Laranja, Lilás)
-          if (tipo == 'entrega') return Colors.blue[700]!;
-          if (tipo == 'recolha') return Colors.orange[700]!;
-          if (tipo == 'outros') return Color(0xFFD8BFD8); // Lilás fraco
-          break;
-
-        default: // Padrão escuro
-          if (tipo == 'entrega') return Colors.blue[900]!;
-          if (tipo == 'recolha') return Colors.orange[900]!;
-          if (tipo == 'outros') return Colors.purple[900]!;
-      }
-      return Colors.grey[900]!;
-    }
   }
 
   // Substitui o uso de `.withOpacity(...)` por `Color.fromRGBO(...)`
