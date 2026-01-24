@@ -1,0 +1,15 @@
+Aja como desenvolvedor sênior de Flutter. Vamos realizar uma alteração estritamente estrutural e segura no widget de lista, com foco total em sintaxe correta para o Redmi 24090RA29G:
+
+Liberação do Scroll (Infinite): Substitua o widget que exibe os cards por um ReorderableListView.builder. Isso permitirá que o Leandro role a lista com todas as 30+ entregas do banco de dados.
+
+Manter Reordenamento: Implemente a lógica de onReorder necessária para que o movimento de trocar a posição dos cards continue funcionando perfeitamente.
+
+Uso Obrigatório de Expanded: Envolva o ReorderableListView.builder em um widget Expanded. Isso evita o erro de layout que quebra o código.
+
+PROIBIDO MEXER EM CORES: Não altere nenhum parâmetro de cor, estilo de texto, fundo de card ou sombras. Mantenha o visual exatamente como está agora.
+
+Sintaxe Cirúrgica: Antes de entregar o código, verifique se todos os parênteses () e chaves } estão fechados corretamente. Use ValueKey(entrega['id']) para cada item da lista.
+
+Salve o arquivo e execute o Restart.
+
+(See <attachments> above for file contents. You may not need to search or read the file again.)

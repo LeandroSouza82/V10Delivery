@@ -1,0 +1,13 @@
+Aja como desenvolvedor sênior de Flutter. Vamos padronizar TODOS os cards da lista seguindo o modelo do card de RECOLHA da foto. Siga estas regras com extremo cuidado sintático:
+
+Estilo do Cliente (Preto): Elimine o box branco interno do cliente. O rótulo 'CLIENTE:' e o dado do banco (entrega['cliente']) devem ser Pretos (Colors.black) e Negrito (FontWeight.bold).
+
+Recado 'Saltado': O box de observações deve ter fundo Amarelo (Colors.yellow). O texto interno DEVE ser Preto e Negrito. Adicione um elevation: 4 ou uma BoxShadow leve para manter o efeito 'saltado' que o Leandro aprovou.
+
+Unificar Layout: Aplique este exato design interno para os cards de 'ENTREGA' (Azul) e 'OUTROS' (Azul Escuro/Cinza). A única coisa que muda entre eles é a cor de fundo do Card principal.
+
+Bolinha e Textos: Mantenha a bolinha branca com número preto e o texto 'ENDEREÇO' em Branco para dar contraste com o nome em preto.
+
+Segurança de Sintaxe: Verifique minuciosamente o fechamento de todos os Widget lists, Column children e Map access. Não deixe chaves } ou parênteses ) órfãos.
+
+Salve e execute um Full Restart (não apenas Hot Reload). (See <attachments> above for file contents. You may not need to search or read the file again.)

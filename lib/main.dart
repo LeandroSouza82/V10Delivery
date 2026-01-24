@@ -1,20 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import 'package:map_launcher/map_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
+import 'dart:async';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:internet_connection_checker/internet_connection_checker.dart';
+import 'package:retry/retry.dart';
+import 'services/cache_service.dart';
+// dotenv and wakelock removed: chaves agora hardcoded no main()
 
 // Número do gestor (formato internacional sem +). Configure aqui.
 const String numeroGestor = '5548996525008';
 const String prefSelectedMapKey = 'selected_map_app';
+
+// Supabase configuration - keep hardcoded and trimmed
+const String supabaseUrl = 'https://uqxoadxqcwidxqsfayem.supabase.co';
+const String supabaseAnonKey =
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxeG9hZHhxY3dpZHhxc2ZheWVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0NDUxODksImV4cCI6MjA4NDAyMTE4OX0.q9_RqSx4YfJxlblPS9fwrocx3HDH91ff1zJvPbVGI8w';
+
+// Modo offline para testes locais. Quando true, carrega dados de exemplo.
+bool modoOffline = true;
 
 // Modelo simples para histórico de entregas
 class ItemHistorico {
@@ -39,9 +53,11 @@ final List<ItemHistorico> historicoEntregas = [];
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  WakelockPlus.enable();
-  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  runApp(V10DeliveryApp());
+
+  // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
+  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
+
+  runApp(const MyApp());
 }
 
 class V10DeliveryApp extends StatelessWidget {
@@ -51,9 +67,19 @@ class V10DeliveryApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(),
+      theme: ThemeData.light(),
+      themeMode: ThemeMode.light,
       home: RotaMotorista(),
     );
+  }
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const V10DeliveryApp();
   }
 }
 
@@ -179,39 +205,24 @@ class RotaMotoristaState extends State<RotaMotorista>
   late Animation<double> _buscarOpacity;
   bool modoDia = false;
   int _esquemaCores = 0; // 0 = padrão, 1/2/3 = esquemas
+  // Busca e reconexão
+  
+  Timer? _reconnectTimer;
+  // Stream-based delivery list to reduce UI rebuild pressure
+  final StreamController<List<dynamic>> _entregasController =
+      StreamController<List<dynamic>>.broadcast();
+  Timer? _entregasDebounce;
+  Timer? _cacheDebounce;
   // histórico de itens finalizados (usar historicoEntregas global)
   // Índices dos cards que estão sendo pressionados (efeito visual)
   final Set<int> _pressedIndices = {};
 
   // Áudio: usar única instância para evitar consumo excessivo de memória
   final AudioPlayer _audioPlayer = AudioPlayer();
-  bool _searchingActive = false; // true quando animação de busca está ativa
   bool _awaitStartChama = false; // usado para iniciar loop após som final
 
-  // DADOS GARANTIDOS PARA NÃO FICAR VAZIO
-  List<Map<String, String>> entregas = [
-    {
-      "id": "01",
-      "cliente": "JOÃO SILVA",
-      "endereco": "Rua Montenegro, 150",
-      "tipo": "entrega",
-      "obs": "Interfone com defeito.",
-    },
-    {
-      "id": "02",
-      "cliente": "MARIA OLIVEIRA",
-      "endereco": "Av. dos Coqueiros, 890",
-      "tipo": "recolha",
-      "obs": "Cuidado com o cachorro.",
-    },
-    {
-      "id": "03",
-      "cliente": "LOGÍSTICA V10",
-      "endereco": "Galpão Central",
-      "tipo": "outros",
-      "obs": "Retirar pacotes da tarde.",
-    },
-  ];
+  // Lista inicial vazia — será preenchida por `carregarDados()`
+  List<dynamic> entregas = [];
   // CONTROLE DO MODAL DE SUCESSO (OK)
   final TextEditingController _nomeController = TextEditingController();
   final TextEditingController _aptController = TextEditingController();
@@ -237,12 +248,20 @@ class RotaMotoristaState extends State<RotaMotorista>
   int entregasFaltam = 0;
   int recolhasFaltam = 0;
   int outrosFaltam = 0;
+  // Novos totais solicitados
+  int totalEntregas = 0;
+  int totalRecolhas = 0;
+  int totalOutros = 0;
   String? _selectedMapName;
 
   @override
   void initState() {
+    // iniciar cache service (não bloqueante)
+    CacheService().init().catchError((e) => debugPrint('Cache init error: $e'));
     super.initState();
-    // Calcular contadores iniciais
+    // Chamar carregarDados() primeiro para popular a lista vinda do Supabase
+    carregarDados();
+    // Calcular contadores iniciais (será atualizado após carregarDados)
     _atualizarContadores();
     // signature controller removed
 
@@ -259,7 +278,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     _audioPlayer.onPlayerComplete.listen((event) {
       if (_awaitStartChama) {
         _awaitStartChama = false;
-        if (_searchingActive) _startChamaLoop();
+        // inicia loop de chamada se for o caso
+        _startChamaLoop();
       }
     });
 
@@ -277,7 +297,9 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
       // Carregar avatar salvo (se houver)
       final av = prefs.getString('avatar_path');
-      if (av != null && av.isNotEmpty) setState(() => _avatarPath = av);
+      if (av != null && av.isNotEmpty) {
+        setState(() => _avatarPath = av);
+      }
     });
 
     // Carregar preferência de esquema de cores (modo_cores). Default = 1
@@ -289,6 +311,19 @@ class RotaMotoristaState extends State<RotaMotorista>
         setState(() => _esquemaCores = 1);
       }
     });
+    // Carregar preferência de modo offline (default true)
+    SharedPreferences.getInstance().then((prefs) {
+      final mo = prefs.getBool('modo_offline');
+      if (mo != null) {
+        setState(() => modoOffline = mo);
+      } else {
+        setState(() => modoOffline = true);
+      }
+    });
+    // Carregar dados iniciais do Supabase
+    carregarDados();
+
+    // Busca removida: não inicializar listener
   }
 
   @override
@@ -297,7 +332,51 @@ class RotaMotoristaState extends State<RotaMotorista>
     _audioPlayer.dispose();
     _nomeController.dispose();
     _aptController.dispose();
+    // search controller removed
+    _reconnectTimer?.cancel();
+    _entregasDebounce?.cancel();
+    _cacheDebounce?.cancel();
+    _entregasController.close();
     super.dispose();
+  }
+
+  // Atualiza a lista de entregas de forma centralizada e notifica o stream
+  void _setEntregas(List<dynamic> nova) {
+    if (!mounted) return;
+    setState(() => entregas = nova);
+    _notifyEntregasDebounced(nova);
+  }
+
+  void _notifyEntregasDebounced(List<dynamic> nova) {
+    // Debounce rapid updates to avoid render pressure and BLASTBufferQueue overload
+    _entregasDebounce?.cancel();
+    _entregasDebounce = Timer(const Duration(milliseconds: 200), () {
+      if (_entregasController.isClosed) return;
+      try {
+        _entregasController.add(nova);
+      } catch (_) {}
+    });
+    // Sempre acionar também a gravação em cache debounced
+    try {
+      final listaMap = nova
+          .map<Map<String, String>>((e) => Map<String, String>.from(e as Map))
+          .toList();
+      _saveToCacheDebounced(listaMap);
+    } catch (_) {}
+  }
+
+  void _saveToCacheDebounced(List<Map<String, String>> lista) {
+    // Debounce cache writes to reduce I/O pressure
+    _cacheDebounce?.cancel();
+    _cacheDebounce = Timer(const Duration(seconds: 1), () async {
+      try {
+        // convert to dynamic maps accepted by CacheService
+        final toSave = lista.map((m) => Map<String, dynamic>.from(m)).toList();
+        await CacheService().saveEntregas(toSave);
+      } catch (e) {
+        debugPrint('Erro ao salvar cache (debounced): $e');
+      }
+    });
   }
 
   // TOOLS DE ÁUDIO
@@ -442,7 +521,6 @@ class RotaMotoristaState extends State<RotaMotorista>
 
     // Se não há mais entregas, tocar som de rota concluída
     if (entregas.isEmpty) {
-      setState(() => _searchingActive = false);
       try {
         await _tocarSomRotaConcluida();
       } catch (e) {
@@ -474,7 +552,6 @@ class RotaMotoristaState extends State<RotaMotorista>
       builder: (dialogCtx) {
         return StatefulBuilder(
           builder: (dialogCtx2, setStateDialog) {
-            final String pickedPath = pickedImageLocal?.path ?? '';
             final optionsSuccess = _opcoesEntrega
                 .where((o) => o != 'PRÓPRIO')
                 .toList();
@@ -483,8 +560,8 @@ class RotaMotoristaState extends State<RotaMotorista>
             final Color textColor = modoDia ? Colors.black87 : Colors.white;
             final Color secondary = modoDia ? Colors.black54 : Colors.white70;
             final Color fillColor = modoDia
-                ? Colors.grey[200]!
-                : Colors.white10!;
+                ? Colors.grey.shade200
+                : Colors.white10;
 
             return AlertDialog(
               backgroundColor: bg,
@@ -700,15 +777,19 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     final String? pickedPathLocal =
                                         pickedImageLocal?.path;
                                     if (pickedPathLocal != null) {
-                                      if (await File(pickedPathLocal).exists())
+                                      if (await File(
+                                        pickedPathLocal,
+                                      ).exists()) {
                                         files.add(XFile(pickedPathLocal));
+                                      }
                                     } else {
                                       final String? fotoPath =
                                           fotoEvidencia?.path ??
                                           caminhoFotoSession;
                                       if (fotoPath != null) {
-                                        if (await File(fotoPath).exists())
+                                        if (await File(fotoPath).exists()) {
                                           files.add(XFile(fotoPath));
+                                        }
                                       }
                                     }
                                   } catch (_) {}
@@ -740,14 +821,17 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     });
                                   }
 
+                                  // ignore: use_build_context_synchronously
+                                  final navigator = Navigator.of(dialogCtx2);
+                                  // Fechar o dialog primeiro para evitar usar `dialogCtx` após await
+                                  navigator.pop();
+
                                   if (entregas.isEmpty) {
                                     try {
                                       await _tocarSomRotaConcluida();
                                     } catch (_) {}
+                                    if (!mounted) return;
                                   }
-
-                                  if (!mounted) return;
-                                  Navigator.of(dialogCtx).pop();
                                 }
                               : null,
                           child: Text('ENVIAR PARA GESTOR'),
@@ -868,13 +952,206 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   void _atualizarContadores() {
-    entregasFaltam = entregas
-        .where((e) => (e['tipo'] ?? '') == 'entrega')
-        .length;
-    recolhasFaltam = entregas
-        .where((e) => (e['tipo'] ?? '') == 'recolha')
-        .length;
-    outrosFaltam = entregas.where((e) => (e['tipo'] ?? '') == 'outros').length;
+    // Usar normalização (trim + lowercase) para evitar falhas por espaços/maiúsculas
+    totalEntregas = entregas.where((e) {
+      final tipoTratado = (e['tipo'] ?? '').toString().trim().toLowerCase();
+      return tipoTratado.contains('entrega');
+    }).length;
+
+    totalRecolhas = entregas.where((e) {
+      final tipoTratado = (e['tipo'] ?? '').toString().trim().toLowerCase();
+      return tipoTratado.contains('recolh');
+    }).length;
+
+    // Outros são o restante dos itens
+    totalOutros = entregas.length - totalEntregas - totalRecolhas;
+
+    // Atualizar variáveis legadas que ainda podem ser usadas pelo app
+    entregasFaltam = totalEntregas;
+    recolhasFaltam = totalRecolhas;
+    outrosFaltam = totalOutros;
+  }
+
+  // Carrega dados da tabela 'entregas' no Supabase e atualiza a lista local
+  Future<void> carregarDados() async {
+    // Helper para carregar dados de teste (reutilizável)
+    List<Map<String, String>> dadosTeste() => [
+      {
+        'id': 't1',
+        'cliente': 'Cliente Teste 1',
+        'endereco': 'Rua Exemplo 1, 123',
+        'tipo': 'entrega',
+        'obs': 'Teste modo offline',
+      },
+      {
+        'id': 't2',
+        'cliente': 'Cliente Teste 2',
+        'endereco': 'Av. Modelo 20',
+        'tipo': 'recolha',
+        'obs': 'Teste modo offline',
+      },
+      {
+        'id': 't3',
+        'cliente': 'Cliente Teste 3',
+        'endereco': 'Praça Demo 5',
+        'tipo': 'outros',
+        'obs': 'Teste modo offline',
+      },
+    ];
+
+    // Se estiver em modo offline, carregar dados de teste locais
+    if (modoOffline) {
+      if (!mounted) return;
+      setState(() {
+        entregas = dadosTeste();
+        _atualizarContadores();
+      });
+      return;
+    }
+
+    // Checar conectividade básica antes de tentar alcançar o Supabase
+    Future<bool> checarConexao() async {
+      try {
+        // Checa se há conectividade de rede (Wi-Fi/4G)
+        final conn = await Connectivity().checkConnectivity();
+        if (conn == ConnectivityResult.none) return false;
+
+        // Verifica que existe acesso real à internet (resolução/ICMP-like)
+        final has = await InternetConnectionChecker().hasConnection;
+        return has;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    if (!await checarConexao()) {
+      if (!mounted) return;
+      setState(() => modoOffline = true);
+
+      // Tentar carregar cache local primeiro
+      try {
+        final cached = await CacheService().loadEntregas();
+          if (cached.isNotEmpty) {
+          final lista = cached.map<Map<String, String>>((m) {
+            return m.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+          }).toList();
+          if (!mounted) return;
+          setState(() {
+            entregas = lista;
+            _atualizarContadores();
+          });
+        } else {
+          if (!mounted) return;
+          setState(() {
+            entregas = dadosTeste();
+            _atualizarContadores();
+          });
+        }
+      } catch (e) {
+        debugPrint('Erro ao carregar cache: $e');
+        if (!mounted) return;
+        setState(() {
+          entregas = dadosTeste();
+          _atualizarContadores();
+        });
+      }
+
+      // iniciar tentativas de reconexão periódicas
+      _reconnectTimer?.cancel();
+      _reconnectTimer = Timer.periodic(const Duration(seconds: 30), (t) async {
+        if (!mounted) {
+          t.cancel();
+          return;
+        }
+        if (await checarConexao()) {
+          t.cancel();
+          await carregarDados();
+        }
+      });
+      return;
+    }
+
+    // Modo online: buscar dados reais no Supabase usando retry exponencial
+    final r = RetryOptions(
+      maxAttempts: 5,
+      delayFactor: const Duration(seconds: 2),
+    );
+
+    try {
+      // Tentativa com retry/backoff: ordenar por 'ordem_entrega' quando disponível;
+      // caso a coluna não exista ou ocorra erro do PostgREST, efetua fallback para 'id'.
+      dynamic response;
+      try {
+        response = await r.retry(() async {
+          return await Supabase.instance.client
+              .from('entregas')
+              .select()
+              .order('ordem_entrega', ascending: true);
+        }, retryIf: (e) => e is SocketException || e is TimeoutException);
+      } catch (e) {
+        // fallback para ordenar por 'id' se a coluna específica não existir
+        response = await r.retry(() async {
+          return await Supabase.instance.client
+              .from('entregas')
+              .select()
+              .order('id', ascending: true);
+        }, retryIf: (e) => e is SocketException || e is TimeoutException);
+      }
+
+      if (!mounted) return;
+
+      final listaRaw = response as List<dynamic>?;
+      if (listaRaw != null) {
+        final lista = listaRaw.map<Map<String, String>>((e) {
+          final m = Map<String, dynamic>.from(e as Map);
+          return {
+            'id': m['id']?.toString() ?? '',
+            'cliente': m['cliente']?.toString() ?? '',
+            'endereco': m['endereco']?.toString() ?? '',
+            'tipo': m['tipo']?.toString() ?? 'entrega',
+            'obs': m['obs']?.toString() ?? '',
+          };
+        }).toList();
+
+        setState(() {
+          entregas = List<dynamic>.from(lista);
+          _atualizarContadores();
+          modoOffline = false;
+        });
+
+        // Salvar em cache local para uso offline (debounced)
+        _saveToCacheDebounced(lista);
+
+        _reconnectTimer?.cancel();
+        debugPrint('Conexão estabelecida com sucesso!');
+      }
+    } on SocketException catch (_) {
+      if (!mounted) return;
+      setState(() => modoOffline = true);
+      setState(() {
+        entregas = dadosTeste();
+        _atualizarContadores();
+      });
+
+      _reconnectTimer?.cancel();
+      _reconnectTimer = Timer.periodic(const Duration(seconds: 30), (t) async {
+        if (!mounted) {
+          t.cancel();
+          return;
+        }
+        try {
+          await carregarDados();
+        } catch (_) {}
+        if (!modoOffline) t.cancel();
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => modoOffline = true);
+      setState(() {
+        entregas = dadosTeste();
+        _atualizarContadores();
+      });
+    }
   }
 
   // Função `_removerItem` removida (não referenciada)
@@ -1009,7 +1286,6 @@ class RotaMotoristaState extends State<RotaMotorista>
         // erro ignorado
       }
     } else {
-      if (_searchingActive) setState(() => _searchingActive = false);
       try {
         await _pararAudio();
       } catch (e) {
@@ -1035,7 +1311,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: modoDia ? Colors.grey[100] : Colors.black,
+      backgroundColor: Colors.white,
       appBar: PreferredSize(
         preferredSize: Size.fromHeight(200.0),
         child: Container(
@@ -1048,31 +1324,54 @@ class RotaMotoristaState extends State<RotaMotorista>
           ),
           child: Column(
             children: [
-              // Linha do título e ícone de chat
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              // AppBar simplificada: título centralizado e switch de conexão à direita
+              Stack(
                 children: [
-                  Text(
-                    'Benvindo, $nomeMotorista',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
+                  Center(
+                    child: Text(
+                      'V10 Delivery',
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: Colors.black87,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: Icon(Icons.chat_bubble, color: Colors.white),
-                        onPressed: () {},
-                      ),
-                      Builder(
-                        builder: (context) => IconButton(
-                          icon: Icon(Icons.menu, color: Colors.white),
-                          onPressed: () => Scaffold.of(context).openDrawer(),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8.0),
+                          child: Row(
+                            children: [
+                              Text(
+                                modoOffline ? 'OFF' : 'ON',
+                                style: TextStyle(
+                                  color: Colors.black87,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              SizedBox(width: 6),
+                              Switch(
+                                value: modoOffline,
+                                onChanged: (val) async {
+                                  final prefs =
+                                      await SharedPreferences.getInstance();
+                                  await prefs.setBool('modo_offline', val);
+                                  setState(() => modoOffline = val);
+                                  await carregarDados();
+                                  if (!mounted) return;
+                                },
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -1085,21 +1384,21 @@ class RotaMotoristaState extends State<RotaMotorista>
                   _buildIndicatorCard(
                     color: _getCorDoCard('entrega'),
                     icon: Icons.person,
-                    count: entregasFaltam,
+                    count: totalEntregas,
                     label: 'ENTREGAS',
                   ),
                   // Card LARANJA para Recolhas
                   _buildIndicatorCard(
                     color: _getCorDoCard('recolha'),
                     icon: Icons.inventory_2,
-                    count: recolhasFaltam,
+                    count: totalRecolhas,
                     label: 'RECOLHA',
                   ),
                   // Card LILÁS para Outros
                   _buildIndicatorCard(
                     color: _getCorDoCard('outros'),
                     icon: Icons.more_horiz,
-                    count: outrosFaltam,
+                    count: totalOutros,
                     label: 'OUTROS',
                   ),
                 ],
@@ -1115,9 +1414,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             DrawerHeader(
               margin: EdgeInsets.zero,
               padding: EdgeInsets.zero,
-              decoration: BoxDecoration(
-                color: Colors.grey[900],
-              ),
+              decoration: BoxDecoration(color: Colors.grey[900]),
               child: Container(
                 width: double.infinity,
                 padding: EdgeInsets.only(top: 18, bottom: 12),
@@ -1144,7 +1441,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                         child: _avatarPath == null
                             ? Icon(
                                 Icons.person,
-                                color: modoDia ? Colors.blue[900] : Colors.white,
+                                color: modoDia
+                                    ? Colors.blue[900]
+                                    : Colors.white,
                               )
                             : null,
                       ),
@@ -1180,9 +1479,32 @@ class RotaMotoristaState extends State<RotaMotorista>
             ),
             ListTile(
               leading: Icon(
-                Icons.palette,
-                color: Colors.red,
+                Icons.wifi_off,
+                color: modoDia ? Colors.black87 : Colors.white70,
               ),
+              title: Text(
+                'Modo Offline',
+                style: TextStyle(color: modoDia ? Colors.black : Colors.white),
+              ),
+              trailing: Switch(
+                value: modoOffline,
+                activeThumbColor: Colors.green,
+                onChanged: (val) async {
+                  final navigator = Navigator.of(context);
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('modo_offline', val);
+                  setState(() {
+                    modoOffline = val;
+                  });
+                  // Recarregar dados conforme o novo modo
+                  await carregarDados();
+                  if (!mounted) return;
+                  navigator.pop();
+                },
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.palette, color: Colors.red),
               title: Text(
                 '🎨 Cores dos Cards',
                 style: TextStyle(color: modoDia ? Colors.black : Colors.white),
@@ -1283,114 +1605,147 @@ class RotaMotoristaState extends State<RotaMotorista>
           ],
         ),
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFF001F3F), Color(0xFF072A52)],
-          ),
-        ),
-        child: entregas.isEmpty
-            ? Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.check_circle_outline,
-                      size: 96,
-                      color: Colors.green,
-                    ),
-                    SizedBox(height: 16),
-                    Text(
-                      'Todas as entregas concluídas!',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      'Bom trabalho, Leandro!',
-                      style: TextStyle(fontSize: 16, color: Colors.grey),
-                    ),
-                    SizedBox(height: 20),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      body: Column(
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0xFF001F3F), Color(0xFF072A52)],
+                ),
+              ),
+              child: entregas.isEmpty
+                  ? Center(
                       child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation(
-                              Color(0xFFFFD700),
+                          Icon(
+                            Icons.check_circle_outline,
+                            size: 96,
+                            color: Colors.green,
+                          ),
+                          SizedBox(height: 16),
+                          Text(
+                            'Todas as entregas concluídas!',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
                             ),
                           ),
-                          SizedBox(height: 12),
-                          FadeTransition(
-                            opacity: _buscarOpacity,
-                            child: Text(
-                              '🔍 Procurando novas rotas na sua região...',
-                              style: TextStyle(color: Colors.white70),
+                          SizedBox(height: 6),
+                          Text(
+                            'Bom trabalho, Leandro!',
+                            style: TextStyle(fontSize: 16, color: Colors.grey),
+                          ),
+                          SizedBox(height: 20),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20.0,
+                            ),
+                            child: Column(
+                              children: [
+                                CircularProgressIndicator(
+                                  valueColor: AlwaysStoppedAnimation(
+                                    Color(0xFFFFD700),
+                                  ),
+                                ),
+                                SizedBox(height: 12),
+                                FadeTransition(
+                                  opacity: _buscarOpacity,
+                                  child: Text(
+                                    '🔍 Procurando novas rotas na sua região...',
+                                    style: TextStyle(color: Colors.white70),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
                       ),
+                    )
+                  : StreamBuilder<List<dynamic>>(
+                      stream: _entregasController.stream,
+                      initialData: entregas,
+                      builder: (ctx, snap) {
+                        final listaAtual = snap.data ?? entregas;
+                        if (listaAtual.isEmpty) {
+                          return Center(
+                            child: Text('Nenhuma entrega disponível'),
+                          );
+                        }
+                        return ReorderableListView.builder(
+                          physics: AlwaysScrollableScrollPhysics(),
+                          buildDefaultDragHandles: false,
+                          proxyDecorator: (child, index, animation) => Material(
+                            elevation: 20,
+                            color: Colors.transparent,
+                            child: child,
+                          ),
+                          itemCount: listaAtual.length,
+                          onReorder: (old, newIdx) {
+                            setState(() {
+                              if (newIdx > old) newIdx -= 1;
+                              final item = listaAtual.removeAt(old);
+                              listaAtual.insert(newIdx, item);
+                              // refletir mudança no estado centralizado
+                              _setEntregas(List<dynamic>.from(listaAtual));
+                            });
+                          },
+                          itemBuilder: (context, index) =>
+                              ReorderableDelayedDragStartListener(
+                                key: ValueKey(listaAtual[index]["id"]),
+                                index: index,
+                                child: _buildCard(listaAtual[index], index),
+                              ),
+                        );
+                      },
                     ),
-                  ],
-                ),
-              )
-            : ReorderableListView.builder(
-                buildDefaultDragHandles: false,
-                proxyDecorator: (child, index, animation) => Material(
-                  elevation: 20,
-                  color: Colors.transparent,
-                  child: child,
-                ),
-                itemCount: entregas.length,
-                onReorder: (old, newIdx) {
-                  setState(() {
-                    if (newIdx > old) newIdx -= 1;
-                    final item = entregas.removeAt(old);
-                    entregas.insert(newIdx, item);
-                  });
-                },
-                itemBuilder: (context, index) =>
-                    ReorderableDelayedDragStartListener(
-                      key: ValueKey(entregas[index]["id"]),
-                      index: index,
-                      child: _buildCard(entregas[index], index),
-                    ),
-              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildCard(Map<String, String> item, int index) {
-    Color corBarra = item['tipo'] == 'recolha'
+    // Normalizar 'tipo' antes da comparação e debugar o valor exato recebido
+    final tipoTratado = item['tipo'].toString().trim().toLowerCase();
+    debugPrint('Tipo recebido: |${item['tipo']}|');
+
+    // Fixar cor da barra lateral conforme tipo (mantém indicador colorido)
+    final corItem = tipoTratado.contains('entrega')
+      ? Colors.blue
+      : tipoTratado.contains('recolh')
         ? Colors.orange
-        : (item['tipo'] == 'outros' ? Colors.purpleAccent : Colors.blue);
+        : Colors.purple;
+    final Color corBarra = corItem;
 
     final bool pressed = _pressedIndices.contains(index);
     final double scale = pressed ? 0.98 : 1.0;
+
+    // Forçar fundo branco e texto escuro para consistência visual
+    final Color fillColor = Colors.white;
+    final Color textPrimary = Colors.black;
+    final Color textSecondary = Colors.black87;
 
     return Container(
       key: ValueKey(item["id"]),
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: _corComOpacidade(_getCorDoCard(item['tipo'] ?? ''), 0.85),
-        borderRadius: BorderRadius.circular(24),
+        color: fillColor,
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: _corComOpacidade(Colors.black, 0.2),
-            offset: Offset(0, 10),
-            blurRadius: 20,
+            color: Colors.black26,
+            offset: Offset(0, 8),
+            blurRadius: 16,
           ),
         ],
-        border: Border.all(
-          color: _corComOpacidade(Colors.white, 0.12),
-          width: 0.5,
-        ),
+        border: Border.all(color: corBarra.withValues(alpha: 0.18), width: 1.0),
       ),
       // Ajuste do padding do card
       padding: EdgeInsets.all(20),
@@ -1398,11 +1753,14 @@ class RotaMotoristaState extends State<RotaMotorista>
         children: [
           // Indicador lateral arredondado
           Container(
-            width: 5,
+            width: 10,
             height: 80,
             decoration: BoxDecoration(
               color: corBarra,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(12),
+                bottomLeft: Radius.circular(12),
+              ),
             ),
           ),
           SizedBox(width: 12),
@@ -1426,7 +1784,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                           width: 40,
                           height: 40,
                           decoration: BoxDecoration(
-                            color: modoDia ? Colors.blue[700] : Colors.white,
+                            color: Colors.blue[700],
                             shape: BoxShape.circle,
                           ),
                           child: Center(
@@ -1435,20 +1793,38 @@ class RotaMotoristaState extends State<RotaMotorista>
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
-                                color: modoDia ? Colors.white : Colors.black,
+                                color: Colors.white,
                               ),
                             ),
                           ),
                         ),
                         SizedBox(width: 10),
                         Expanded(
-                          child: Text(
-                            item['tipo']!.toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: modoDia ? Colors.black : Colors.white,
-                            ),
+                          child: Stack(
+                            alignment: Alignment.centerLeft,
+                            children: [
+                              // Stroke
+                              Text(
+                                item['tipo']!.toUpperCase(),
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  foreground: Paint()
+                                    ..style = PaintingStyle.stroke
+                                    ..strokeWidth = 1.6
+                                    ..color = corBarra,
+                                ),
+                              ),
+                              // Fill
+                              Text(
+                                item['tipo']!.toUpperCase(),
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: textPrimary,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -1461,40 +1837,23 @@ class RotaMotoristaState extends State<RotaMotorista>
                       'CLIENTE',
                       style: TextStyle(
                         fontSize: 12,
-                        color: modoDia ? Colors.grey[600] : Colors.grey[300],
+                        color: Colors.grey[700],
                       ),
                     ),
                     SizedBox(height: 6),
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black38,
-                            blurRadius: 5,
-                            offset: Offset(0, 3),
-                          ),
-                        ],
-                      ),
-                      child: Text(
-                        item['cliente'] ?? '',
-                        style: TextStyle(
-                          color: Colors.black,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                    // Cliente (remover caixa branca para manter estilo profissional)
+                    Text(
+                      item['cliente'] ?? '',
+                      style: TextStyle(
+                        color: textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
                     SizedBox(height: 6),
                     Text(
                       'ENDEREÇO',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: modoDia ? Colors.grey[600] : Colors.grey[300],
-                      ),
+                      style: TextStyle(fontSize: 12, color: textSecondary),
                     ),
                     SizedBox(height: 6),
                     Text(
@@ -1502,7 +1861,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFFFFD700),
+                        color: textPrimary,
                       ),
                     ),
 
@@ -1515,16 +1874,16 @@ class RotaMotoristaState extends State<RotaMotorista>
                         padding: EdgeInsets.all(10),
                         margin: EdgeInsets.only(top: 6, bottom: 6),
                         decoration: BoxDecoration(
-                            color: Colors.yellow[600],
-                            borderRadius: BorderRadius.circular(8),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black38,
-                                blurRadius: 5,
-                                offset: Offset(0, 3),
-                              ),
-                            ],
-                          ),
+                          color: Colors.yellow[600],
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black38,
+                              blurRadius: 5,
+                              offset: Offset(0, 3),
+                            ),
+                          ],
+                        ),
                         child: Row(
                           children: [
                             Icon(
@@ -1643,9 +2002,6 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       final Color secondary = modoDia
                                           ? Colors.black54
                                           : Colors.white70;
-                                      final Color fillColor = modoDia
-                                          ? Colors.grey[200]!
-                                          : Colors.white10!;
 
                                       return AlertDialog(
                                         backgroundColor: bg,
@@ -2042,12 +2398,13 @@ class RotaMotoristaState extends State<RotaMotorista>
               ListTile(
                 title: Text('Padrão', style: TextStyle(color: textColor)),
                 onTap: () async {
+                  final navigator = Navigator.of(ctx);
                   setState(() => _esquemaCores = 0);
                   try {
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setInt('modo_cores', 0);
                   } catch (_) {}
-                  Navigator.of(ctx).pop();
+                  navigator.pop();
                 },
                 trailing: _esquemaCores == 0
                     ? Icon(Icons.check, color: Colors.green)
@@ -2056,12 +2413,13 @@ class RotaMotoristaState extends State<RotaMotorista>
               ListTile(
                 title: Text('Modo 1', style: TextStyle(color: textColor)),
                 onTap: () async {
+                  final navigator = Navigator.of(ctx);
                   setState(() => _esquemaCores = 1);
                   try {
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setInt('modo_cores', 1);
                   } catch (_) {}
-                  Navigator.of(ctx).pop();
+                  navigator.pop();
                 },
                 trailing: _esquemaCores == 1
                     ? Icon(Icons.check, color: Colors.green)
@@ -2070,12 +2428,13 @@ class RotaMotoristaState extends State<RotaMotorista>
               ListTile(
                 title: Text('Modo 2', style: TextStyle(color: textColor)),
                 onTap: () async {
+                  final navigator = Navigator.of(ctx);
                   setState(() => _esquemaCores = 2);
                   try {
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setInt('modo_cores', 2);
                   } catch (_) {}
-                  Navigator.of(ctx).pop();
+                  navigator.pop();
                 },
                 trailing: _esquemaCores == 2
                     ? Icon(Icons.check, color: Colors.green)
@@ -2257,6 +2616,7 @@ class HistoricoAtividades extends StatelessWidget {
           const Divider(height: 1),
           Expanded(
             child: ListView.builder(
+              physics: AlwaysScrollableScrollPhysics(),
               itemCount: historico.length,
               itemBuilder: (ctx, i) {
                 final entry =
