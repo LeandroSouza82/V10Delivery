@@ -530,13 +530,15 @@ class RotaMotoristaState extends State<RotaMotorista>
     String cliente,
     String endereco,
     String motivoFinal,
+    String detalhesObs,
   ) async {
     final hora = DateFormat('HH:mm').format(DateTime.now());
     final hasPhoto = imagemFalha != null;
 
     final report =
-        '*Status:* Falha\n'
+        '*Status:* falha\n'
         '*Motivo:* $motivoFinal\n'
+        '${detalhesObs.isNotEmpty ? '*Detalhes:* $detalhesObs\n' : ''}'
         '*Cliente:* $cliente\n'
         '*Endereço:* $endereco\n'
         '*Motorista:* $nomeMotorista\n'
@@ -570,7 +572,6 @@ class RotaMotoristaState extends State<RotaMotorista>
     }
 
     setState(() {
-      entregas.removeWhere((c) => c['id'] == cardId);
       imagemFalha = null;
       motivoFalhaSelecionada = null;
     });
@@ -2338,27 +2339,21 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                 ),
 
                                                 SizedBox(height: 12),
-                                                if (motivoSelecionadoLocal ==
-                                                    'Outros Motivos') ...[
-                                                  TextField(
-                                                    controller:
-                                                        motivoOutrosController,
-                                                    style: TextStyle(
-                                                      color: Colors.white,
-                                                    ),
-                                                    decoration: InputDecoration(
-                                                      hintText:
-                                                          'Descreva o motivo',
-                                                      hintStyle: TextStyle(
-                                                        color: Colors.white54,
-                                                      ),
-                                                      filled: true,
-                                                      fillColor:
-                                                          Colors.grey[800],
-                                                    ),
+                                                TextField(
+                                                  controller: motivoOutrosController,
+                                                  style: TextStyle(
+                                                    color: Colors.white,
                                                   ),
-                                                  SizedBox(height: 12),
-                                                ],
+                                                  decoration: InputDecoration(
+                                                    hintText: 'Detalhes (opcional)',
+                                                    hintStyle: TextStyle(
+                                                      color: Colors.white54,
+                                                    ),
+                                                    filled: true,
+                                                    fillColor: Colors.grey[800],
+                                                  ),
+                                                ),
+                                                SizedBox(height: 12),
 
                                                 SizedBox(height: 8),
 
@@ -2383,52 +2378,91 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                             FontWeight.bold,
                                                       ),
                                                     ),
-                                                    onPressed:
-                                                        (motivoSelecionadoLocal !=
-                                                            null)
+                                                    onPressed: (motivoSelecionadoLocal != null)
                                                         ? () async {
-                                                            final motivoFinal =
-                                                                motivoSelecionadoLocal ==
-                                                                        'Outros Motivos' &&
-                                                                    motivoOutrosController
-                                                                        .text
-                                                                        .isNotEmpty
-                                                                ? motivoOutrosController
-                                                                      .text
-                                                                : motivoSelecionadoLocal ??
-                                                                      'Não informado';
+                                                            final detalhesController =
+                                                                motivoOutrosController;
+                                                            final detalhesText =
+                                                                detalhesController.text
+                                                                    .trim();
 
-                                                            final card =
-                                                                entregas[index];
+                                                            final motivoFinal =
+                                                                motivoSelecionadoLocal ??
+                                                                    'Não informado';
+
+                                                            final card = entregas[index];
                                                             try {
                                                               try {
                                                                 await _audioPlayer
-                                                                    .setVolume(
-                                                                      1.0,
-                                                                    );
-                                                                // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
-                                                                // serem registrados em pubspec.yaml. Evite alterar esse caminho.
+                                                                    .setVolume(1.0);
                                                                 await _audioPlayer.play(
                                                                   AssetSource(
-                                                                    'audios/falha_3.mp3',
-                                                                  ),
+                                                                      'audios/falha_3.mp3'),
                                                                 );
                                                               } catch (_) {}
                                                               await Future.delayed(
-                                                                Duration(
-                                                                  milliseconds:
-                                                                      500,
-                                                                ),
+                                                                Duration(milliseconds: 500),
                                                               );
                                                             } catch (_) {}
-                                                            await _enviarFalha(
-                                                              card['id'] ?? '',
-                                                              card['cliente'] ??
-                                                                  '',
-                                                              card['endereco'] ??
-                                                                  '',
-                                                              motivoFinal,
-                                                            );
+
+                                                            // Primeiro, tentar atualizar no Supabase
+                                                            final payload = {
+                                                              'motivo_nao_entrega':
+                                                                  motivoFinal,
+                                                              'obs': detalhesText,
+                                                              'data_conclusao':
+                                                                  DateTime.now()
+                                                                      .toIso8601String(),
+                                                              'status': 'falha',
+                                                            };
+
+                                                            dynamic res;
+                                                            try {
+                                                              res = await Supabase
+                                                                  .instance.client
+                                                                  .from('entregas')
+                                                                  .update(payload)
+                                                                  .eq('id', card['id'])
+                                                                  .select();
+                                                            } catch (err) {
+                                                              debugPrint(
+                                                                  'ERRO NO UPDATE FALHA: $err');
+                                                              if (mounted) {
+                                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                                  SnackBar(
+                                                                    content: Text(
+                                                                        'Falha ao salvar motivo no servidor.'),
+                                                                  ),
+                                                                );
+                                                              }
+                                                              return;
+                                                            }
+
+                                                            // Se update OK, proceder com envio/remoção local
+                                                            if (res is List && res.isNotEmpty) {
+                                                              await _enviarFalha(
+                                                                card['id'] ?? '',
+                                                                card['cliente'] ?? '',
+                                                                card['endereco'] ?? '',
+                                                                motivoFinal,
+                                                                detalhesText,
+                                                              );
+
+                                                              // remover localmente após persistência
+                                                              setState(() {
+                                                                entregas
+                                                                    .removeWhere((c) => c['id'] == card['id']);
+                                                              });
+                                                            } else {
+                                                              if (mounted) {
+                                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                                  SnackBar(
+                                                                    content: Text(
+                                                                        'Atualização não confirmada pelo servidor.'),
+                                                                  ),
+                                                                );
+                                                              }
+                                                            }
                                                           }
                                                         : null,
                                                     child: Text(
