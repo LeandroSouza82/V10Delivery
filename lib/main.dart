@@ -579,9 +579,15 @@ class RotaMotoristaState extends State<RotaMotorista>
     });
 
     // Remover localmente da lista de entregas para atualizar UI imediatamente
-    setState(() {
-      _entregas.removeWhere((item) => item['id'] == cardId);
-    });
+    // mover setState antes do fechamento do modal e comparar IDs como string
+    if (mounted) {
+      setState(() {
+        _entregas.removeWhere(
+          (item) => item['id'].toString() == cardId.toString(),
+        );
+      });
+      Navigator.of(context).pop();
+    }
 
     // Se não há mais entregas, tocar som de rota concluída
     if (entregas.isEmpty) {
@@ -591,10 +597,6 @@ class RotaMotoristaState extends State<RotaMotorista>
         // ignorar
       }
     }
-
-    if (!mounted) return;
-    final navigator = Navigator.of(context);
-    navigator.pop();
   }
 
   Future<void> _salvarMapaSelecionado(String mapName) async {
@@ -1215,6 +1217,8 @@ class RotaMotoristaState extends State<RotaMotorista>
             'cliente': m['cliente']?.toString() ?? '',
             'endereco': m['endereco']?.toString() ?? '',
             'tipo': m['tipo']?.toString() ?? 'entrega',
+            // incluir 'status' para preservarmos o estado do item
+            'status': m['status']?.toString() ?? '',
             // manter compatibilidade com chave antiga 'obs' e adicionar 'observacoes'
             'obs': m['obs']?.toString() ?? '',
             'observacoes':
