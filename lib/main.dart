@@ -909,6 +909,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         fotoEvidencia = null;
                                         caminhoFotoSession = null;
                                       });
+                                      // Notificar stream/UI que a lista mudou
+                                      _notifyEntregasDebounced(List<dynamic>.from(entregas));
 
                                       if (entregas.isEmpty) {
                                         try {
@@ -2340,12 +2342,14 @@ class RotaMotoristaState extends State<RotaMotorista>
 
                                                 SizedBox(height: 12),
                                                 TextField(
-                                                  controller: motivoOutrosController,
+                                                  controller:
+                                                      motivoOutrosController,
                                                   style: TextStyle(
                                                     color: Colors.white,
                                                   ),
                                                   decoration: InputDecoration(
-                                                    hintText: 'Detalhes (opcional)',
+                                                    hintText:
+                                                        'Detalhes (opcional)',
                                                     hintStyle: TextStyle(
                                                       color: Colors.white54,
                                                     ),
@@ -2378,30 +2382,40 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                             FontWeight.bold,
                                                       ),
                                                     ),
-                                                    onPressed: (motivoSelecionadoLocal != null)
+                                                    onPressed:
+                                                        (motivoSelecionadoLocal !=
+                                                            null)
                                                         ? () async {
                                                             final detalhesController =
                                                                 motivoOutrosController;
                                                             final detalhesText =
-                                                                detalhesController.text
+                                                                detalhesController
+                                                                    .text
                                                                     .trim();
 
                                                             final motivoFinal =
                                                                 motivoSelecionadoLocal ??
-                                                                    'Não informado';
+                                                                'Não informado';
 
-                                                            final card = entregas[index];
+                                                            final card =
+                                                                entregas[index];
                                                             try {
                                                               try {
                                                                 await _audioPlayer
-                                                                    .setVolume(1.0);
+                                                                    .setVolume(
+                                                                      1.0,
+                                                                    );
                                                                 await _audioPlayer.play(
                                                                   AssetSource(
-                                                                      'audios/falha_3.mp3'),
+                                                                    'audios/falha_3.mp3',
+                                                                  ),
                                                                 );
                                                               } catch (_) {}
                                                               await Future.delayed(
-                                                                Duration(milliseconds: 500),
+                                                                Duration(
+                                                                  milliseconds:
+                                                                      500,
+                                                                ),
                                                               );
                                                             } catch (_) {}
 
@@ -2409,7 +2423,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                             final payload = {
                                                               'motivo_nao_entrega':
                                                                   motivoFinal,
-                                                              'obs': detalhesText,
+                                                              'obs':
+                                                                  detalhesText,
                                                               'data_conclusao':
                                                                   DateTime.now()
                                                                       .toIso8601String(),
@@ -2419,19 +2434,31 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                             dynamic res;
                                                             try {
                                                               res = await Supabase
-                                                                  .instance.client
-                                                                  .from('entregas')
-                                                                  .update(payload)
-                                                                  .eq('id', card['id'])
+                                                                  .instance
+                                                                  .client
+                                                                  .from(
+                                                                    'entregas',
+                                                                  )
+                                                                  .update(
+                                                                    payload,
+                                                                  )
+                                                                  .eq(
+                                                                    'id',
+                                                                    card['id'],
+                                                                  )
                                                                   .select();
                                                             } catch (err) {
                                                               debugPrint(
-                                                                  'ERRO NO UPDATE FALHA: $err');
+                                                                'ERRO NO UPDATE FALHA: $err',
+                                                              );
                                                               if (mounted) {
-                                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                                ScaffoldMessenger.of(
+                                                                  context,
+                                                                ).showSnackBar(
                                                                   SnackBar(
                                                                     content: Text(
-                                                                        'Falha ao salvar motivo no servidor.'),
+                                                                      'Falha ao salvar motivo no servidor.',
+                                                                    ),
                                                                   ),
                                                                 );
                                                               }
@@ -2439,26 +2466,36 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                             }
 
                                                             // Se update OK, proceder com envio/remoção local
-                                                            if (res is List && res.isNotEmpty) {
+                                                            if (res is List &&
+                                                                res.isNotEmpty) {
                                                               await _enviarFalha(
-                                                                card['id'] ?? '',
-                                                                card['cliente'] ?? '',
-                                                                card['endereco'] ?? '',
+                                                                card['id'] ??
+                                                                    '',
+                                                                card['cliente'] ??
+                                                                    '',
+                                                                card['endereco'] ??
+                                                                    '',
                                                                 motivoFinal,
                                                                 detalhesText,
                                                               );
 
                                                               // remover localmente após persistência
                                                               setState(() {
-                                                                entregas
-                                                                    .removeWhere((c) => c['id'] == card['id']);
+                                                                entregas.removeWhere(
+                                                                  (c) => c['id'] == card['id'],
+                                                                );
                                                               });
+                                                              // Notificar stream/UI que a lista mudou
+                                                              _notifyEntregasDebounced(List<dynamic>.from(entregas));
                                                             } else {
                                                               if (mounted) {
-                                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                                ScaffoldMessenger.of(
+                                                                  context,
+                                                                ).showSnackBar(
                                                                   SnackBar(
                                                                     content: Text(
-                                                                        'Atualização não confirmada pelo servidor.'),
+                                                                      'Atualização não confirmada pelo servidor.',
+                                                                    ),
                                                                   ),
                                                                 );
                                                               }
