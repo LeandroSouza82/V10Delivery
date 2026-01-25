@@ -57,6 +57,14 @@ Future<void> main() async {
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
+  // Status bar: transparente com ícones brancos
+  SystemChrome.setSystemUIOverlayStyle(
+    SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+    ),
+  );
+
   // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
 
@@ -465,8 +473,9 @@ class RotaMotoristaState extends State<RotaMotorista>
       width: 100,
       height: 100,
       decoration: BoxDecoration(
-        color: color,
+        color: Colors.white10,
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withAlpha(230), width: 1),
         boxShadow: [
           BoxShadow(color: Color(0x4D000000), blurRadius: 6, spreadRadius: 1),
         ],
@@ -485,7 +494,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             ),
           ),
           SizedBox(height: 4),
-          Text(label, style: TextStyle(color: Color(0xE6FFFFFF), fontSize: 12)),
+          Text(label, style: TextStyle(color: Colors.white70, fontSize: 12)),
         ],
       ),
     );
@@ -1346,7 +1355,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       appBar: PreferredSize(
         preferredSize: Size.fromHeight(200.0),
         child: Container(
-          decoration: BoxDecoration(color: Color(0xFF000D1A)),
+          decoration: BoxDecoration(color: Colors.black),
           padding: EdgeInsets.only(
             top: MediaQuery.of(context).padding.top,
             left: 20,
