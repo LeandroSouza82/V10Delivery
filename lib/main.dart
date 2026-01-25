@@ -1079,7 +1079,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         response = await r.retry(() async {
           return await Supabase.instance.client
               .from('entregas')
-              .select()
+              .select('*')
               .order('ordem_entrega', ascending: true);
         }, retryIf: (e) => e is SocketException || e is TimeoutException);
       } catch (e) {
@@ -1087,7 +1087,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         response = await r.retry(() async {
           return await Supabase.instance.client
               .from('entregas')
-              .select()
+              .select('*')
               .order('id', ascending: true);
         }, retryIf: (e) => e is SocketException || e is TimeoutException);
       }
@@ -1103,7 +1103,13 @@ class RotaMotoristaState extends State<RotaMotorista>
             'cliente': m['cliente']?.toString() ?? '',
             'endereco': m['endereco']?.toString() ?? '',
             'tipo': m['tipo']?.toString() ?? 'entrega',
+            // manter compatibilidade com chave antiga 'obs' e adicionar 'observacoes'
             'obs': m['obs']?.toString() ?? '',
+            'observacoes':
+                m['observacoes']?.toString() ??
+                m['observacao']?.toString() ??
+                m['obs']?.toString() ??
+                '',
           };
         }).toList();
 
@@ -1862,39 +1868,39 @@ class RotaMotoristaState extends State<RotaMotorista>
                     // Observações/aviso do gestor (usar obrigatoriamente 'observacoes')
                     Builder(
                       builder: (ctx) {
-                        final obs = (item['observacoes'] ?? '')
-                            .toString()
-                            .trim();
-                        final bool temObs = obs.isNotEmpty;
-                        final Color corObs = temObs
-                            ? Colors.redAccent
-                            : Colors.grey[700]!;
-                        final String prefix = temObs ? 'Aviso: ' : 'Obs: ';
-                        final String texto = temObs ? obs : 'Sem avisos';
+                        // DEBUG: mostrar chaves recebidas do banco
+                        try {
+                          print('Colunas disponíveis: ${item.keys}');
+                        } catch (_) {}
+
+                        final avisoTexto =
+                            'Aviso: ' +
+                            (item['observacoes'] ??
+                                item['observacao'] ??
+                                item['obs'] ??
+                                'Sem avisos no DB');
 
                         return Padding(
                           padding: const EdgeInsets.only(top: 8.0),
-                          child: Text.rich(
-                            TextSpan(
-                              children: [
-                                TextSpan(
-                                  text: prefix,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontStyle: FontStyle.italic,
-                                    color: corObs,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: texto,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontStyle: FontStyle.italic,
-                                    color: corObs,
-                                  ),
-                                ),
-                              ],
+                          child: Text(
+                            avisoTexto,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontStyle: FontStyle.italic,
+                              color:
+                                  (item['observacoes'] ??
+                                              item['observacao'] ??
+                                              item['obs']) !=
+                                          null &&
+                                      (item['observacoes'] ??
+                                              item['observacao'] ??
+                                              item['obs'])
+                                          .toString()
+                                          .trim()
+                                          .isNotEmpty
+                                  ? Colors.redAccent
+                                  : Colors.grey[700]!,
+                              fontWeight: FontWeight.w600,
                             ),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
