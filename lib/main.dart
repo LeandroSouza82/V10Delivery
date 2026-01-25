@@ -226,6 +226,8 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Lista inicial vazia — será preenchida por `carregarDados()`
   List<dynamic> entregas = [];
+  // alias getter para compatibilidade com instruções que usam `_entregas`
+  List<dynamic> get _entregas => entregas;
   // CONTROLE DO MODAL DE SUCESSO (OK)
   final TextEditingController _nomeController = TextEditingController();
   final TextEditingController _aptController = TextEditingController();
@@ -576,6 +578,11 @@ class RotaMotoristaState extends State<RotaMotorista>
       motivoFalhaSelecionada = null;
     });
 
+    // Remover localmente da lista de entregas para atualizar UI imediatamente
+    setState(() {
+      _entregas.removeWhere((item) => item['id'] == cardId);
+    });
+
     // Se não há mais entregas, tocar som de rota concluída
     if (entregas.isEmpty) {
       try {
@@ -910,7 +917,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         caminhoFotoSession = null;
                                       });
                                       // Notificar stream/UI que a lista mudou
-                                      _notifyEntregasDebounced(List<dynamic>.from(entregas));
+                                      _notifyEntregasDebounced(
+                                        List<dynamic>.from(entregas),
+                                      );
 
                                       if (entregas.isEmpty) {
                                         try {
@@ -2482,11 +2491,19 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                               // remover localmente após persistência
                                                               setState(() {
                                                                 entregas.removeWhere(
-                                                                  (c) => c['id'] == card['id'],
+                                                                  (c) =>
+                                                                      c['id'] ==
+                                                                      card['id'],
                                                                 );
                                                               });
                                                               // Notificar stream/UI que a lista mudou
-                                                              _notifyEntregasDebounced(List<dynamic>.from(entregas));
+                                                              _notifyEntregasDebounced(
+                                                                List<
+                                                                  dynamic
+                                                                >.from(
+                                                                  entregas,
+                                                                ),
+                                                              );
                                                             } else {
                                                               if (mounted) {
                                                                 ScaffoldMessenger.of(
