@@ -282,6 +282,9 @@ class RotaMotoristaState extends State<RotaMotorista>
   int _lastEntregaId = 0;
   // Controle para evitar tocar som no primeiro carregamento
   int _totalEntregasAntigo = -1;
+  // Indicador visual do polling: pisca a cada verificação; fica vermelho se offline
+  bool _pollingBlink = false;
+  bool _pollingOffline = false;
   // Controller para rolar a lista de entregas quando novos pedidos chegarem
   late ScrollController _entregasScrollController;
   Timer? _entregasPollingTimer;
@@ -434,10 +437,29 @@ class RotaMotoristaState extends State<RotaMotorista>
             // Atualizar _lastEntregaId com o primeiro item, se existir
             final firstId = int.tryParse(novaLista.first['id'] ?? '') ?? 0;
             if (firstId > 0) _lastEntregaId = firstId;
+            // Indicar visualmente que o polling aconteceu e estamos online
+            if (!mounted) return;
+            setState(() {
+              _pollingOffline = false;
+              _pollingBlink = true;
+            });
+            Future.delayed(const Duration(milliseconds: 350), () {
+              if (!mounted) return;
+              setState(() {
+                _pollingBlink = false;
+              });
+            });
           }
           debugPrint('STATUS REALTIME: polling (entregas)');
         } catch (e) {
           debugPrint('Erro no polling entregas: $e');
+          // sinalizar offline para o indicador
+          if (mounted) {
+            setState(() {
+              _pollingOffline = true;
+              _pollingBlink = false;
+            });
+          }
         }
       });
     } catch (e) {
@@ -1664,54 +1686,78 @@ class RotaMotoristaState extends State<RotaMotorista>
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    // Lado Direito: Balão de Chat com Badge Vermelho
+                    // Lado Direito: indicador de polling + Balão de Chat com Badge
                     Align(
                       alignment: Alignment.centerRight,
-                      child: Stack(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          IconButton(
-                            icon: Icon(
-                              Icons.chat_bubble,
-                              color: modoDia ? Colors.black : Colors.white,
-                            ),
-                            onPressed: () {
-                              showAvisosModal(
-                                context: context,
-                                buscarAvisos: _buscarAvisos,
-                                atualizarAvisosNaoLidas: _atualizarAvisosNaoLidas,
-                                esquemaCores: _esquemaCores,
-                                modoDia: modoDia,
-                              );
-                            },
-                          ),
-                          // Badge Vermelho (Aparece se tiver mensagens)
-                          if (mensagensNaoLidas > 0)
-                            Positioned(
-                              right: 8,
-                              top: 8,
-                              child: Container(
-                                padding: const EdgeInsets.all(2),
-                                decoration: BoxDecoration(
-                                  color: Colors.red,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                constraints: const BoxConstraints(
-                                  minWidth: 16,
-                                  minHeight: 16,
-                                ),
-                                child: Text(
-                                  mensagensNaoLidas > 9
-                                      ? '9+'
-                                      : '$mensagensNaoLidas',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
+                          // Indicador de Polling: nuvem que pisca quando verifica e fica vermelha se offline
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8.0),
+                            child: GestureDetector(
+                              onTap: () {},
+                              child: AnimatedOpacity(
+                                opacity: _pollingOffline ? 1.0 : (_pollingBlink ? 1.0 : 0.75),
+                                duration: const Duration(milliseconds: 180),
+                                child: Transform.scale(
+                                  scale: _pollingBlink ? 1.18 : 1.0,
+                                  child: Icon(
+                                    Icons.cloud,
+                                    color: _pollingOffline
+                                        ? Colors.red
+                                        : (modoDia ? Colors.green : Colors.lightGreenAccent),
+                                    size: 22,
                                   ),
-                                  textAlign: TextAlign.center,
                                 ),
                               ),
                             ),
+                          ),
+                          Stack(
+                            children: [
+                              IconButton(
+                                icon: Icon(
+                                  Icons.chat_bubble,
+                                  color: modoDia ? Colors.black : Colors.white,
+                                ),
+                                onPressed: () {
+                                  showAvisosModal(
+                                    context: context,
+                                    buscarAvisos: _buscarAvisos,
+                                    atualizarAvisosNaoLidas: _atualizarAvisosNaoLidas,
+                                    esquemaCores: _esquemaCores,
+                                    modoDia: modoDia,
+                                  );
+                                },
+                              ),
+                              // Badge Vermelho (Aparece se tiver mensagens)
+                              if (mensagensNaoLidas > 0)
+                                Positioned(
+                                  right: 8,
+                                  top: 8,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    constraints: const BoxConstraints(
+                                      minWidth: 16,
+                                      minHeight: 16,
+                                    ),
+                                    child: Text(
+                                      mensagensNaoLidas > 9 ? '9+' : '$mensagensNaoLidas',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
