@@ -1379,9 +1379,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Builder(
-                      builder: (ctx) => IconButton(
+                      builder: (context) => IconButton(
                         icon: const Icon(Icons.menu, color: Colors.white),
-                        onPressed: () => Scaffold.of(ctx).openEndDrawer(),
+                        onPressed: () => Scaffold.of(context).openEndDrawer(),
                       ),
                     ),
                   ),
