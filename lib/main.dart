@@ -596,7 +596,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   // Única função de modal: abre o bottom sheet de sucesso
-  void _buildSuccessModal(BuildContext ctx, String nomeCliente) {
+  void _buildSuccessModal(BuildContext ctx, Map<String, dynamic> item) {
+    final String nomeCliente = item['cliente'] ?? '';
     String? opcaoSelecionada;
     String obsTexto = '';
     XFile? pickedImageLocal;
@@ -850,43 +851,94 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     }
                                   } catch (_) {}
 
+                                  // Persistir no Supabase com as chaves corretas (id, cliente, endereco, tipo, obs)
+                                  final idItem = item['id'];
+                                  final payload = {
+                                    'cliente': item['cliente'] ?? '',
+                                    'endereco': item['endereco'] ?? '',
+                                    'tipo_recebedor': opcaoSelecionada ?? '',
+                                    'obs': obsTexto.trim(),
+                                    'data_conclusao': DateTime.now()
+                                        .toIso8601String(),
+                                    'status': 'entregue',
+                                  };
+
                                   try {
-                                    if (files.isNotEmpty) {
-                                      // ignore: deprecated_member_use
-                                      await Share.shareXFiles(
-                                        files,
-                                        text: mensagem,
-                                      );
+                                    dynamic res;
+                                    try {
+                                      res = await Supabase.instance.client
+                                          .from('entregas')
+                                          .update(payload)
+                                          .eq('id', idItem)
+                                          .select();
+                                    } catch (e) {
+                                      // Log específico solicitado
+                                      debugPrint('ERRO NO UPDATE: $e');
+                                      rethrow;
+                                    }
+
+                                    if (res is List && res.isNotEmpty) {
+                                      // após persistir com sucesso, enviar foto/mensagem
+                                      try {
+                                        if (files.isNotEmpty) {
+                                          // ignore: deprecated_member_use
+                                          await Share.shareXFiles(
+                                            files,
+                                            text: mensagem,
+                                          );
+                                        } else {
+                                          await _enviarWhatsApp(
+                                            mensagem,
+                                            phone: numeroGestor,
+                                          );
+                                        }
+                                      } catch (e) {
+                                        debugPrint(
+                                          'Falha ao enviar mídia/mensagem: $e',
+                                        );
+                                      }
+
+                                      // fechar modal e remover localmente
+                                      Navigator.pop(context);
+                                      setState(() {
+                                        entregas.removeWhere(
+                                          (e) => e['id'] == idItem,
+                                        );
+                                        _atualizarContadores();
+                                        fotoEvidencia = null;
+                                        caminhoFotoSession = null;
+                                      });
+
+                                      if (entregas.isEmpty) {
+                                        try {
+                                          await _tocarSomRotaConcluida();
+                                        } catch (_) {}
+                                      }
                                     } else {
-                                      await _enviarWhatsApp(
-                                        mensagem,
-                                        phone: numeroGestor,
+                                      throw Exception(
+                                        'Resposta inválida do Supabase: $res',
                                       );
                                     }
-                                  } catch (_) {}
-
-                                  final idx = entregas.indexWhere(
-                                    (e) => (e['cliente'] ?? '') == nomeCliente,
-                                  );
-                                  if (idx != -1) {
-                                    setState(() {
-                                      entregas.removeAt(idx);
-                                      _atualizarContadores();
-                                      fotoEvidencia = null;
-                                      caminhoFotoSession = null;
-                                    });
-                                  }
-
-                                  // ignore: use_build_context_synchronously
-                                  final navigator = Navigator.of(dialogCtx2);
-                                  // Fechar o dialog primeiro para evitar usar `dialogCtx` após await
-                                  navigator.pop();
-
-                                  if (entregas.isEmpty) {
-                                    try {
-                                      await _tocarSomRotaConcluida();
-                                    } catch (_) {}
-                                    if (!mounted) return;
+                                  } catch (e) {
+                                    final err = e.toString();
+                                    debugPrint(
+                                      'Erro ao finalizar entrega: $err',
+                                    );
+                                    final m = RegExp(
+                                      r'column "([^"]+)"',
+                                    ).firstMatch(err);
+                                    if (m != null)
+                                      debugPrint(
+                                        'Coluna não encontrada no banco: ${m.group(1)}',
+                                      );
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          '❌ Falha ao salvar no banco: ${err.split('\n').first}',
+                                        ),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
                                   }
                                 }
                               : null,
@@ -1126,6 +1178,7 @@ class RotaMotoristaState extends State<RotaMotorista>
           return await Supabase.instance.client
               .from('entregas')
               .select('*')
+              .or('status.eq.pendente,status.eq.em_rota')
               .order('ordem_entrega', ascending: true);
         }, retryIf: (e) => e is SocketException || e is TimeoutException);
       } catch (e) {
@@ -1134,6 +1187,7 @@ class RotaMotoristaState extends State<RotaMotorista>
           return await Supabase.instance.client
               .from('entregas')
               .select('*')
+              .or('status.eq.pendente,status.eq.em_rota')
               .order('id', ascending: true);
         }, retryIf: (e) => e is SocketException || e is TimeoutException);
       }
@@ -1257,7 +1311,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         '*🏠 Endereço:* ${item['endereco']}\n'
         '*👤 Recebido por:* ${nomeRecebedor.isNotEmpty ? nomeRecebedor : nomeMotorista}\n'
         '*🕒 Horário:* $horario\n'
-        '*✅ Status:* Concluído';
+        '*✅ Status:* entregue';
 
     // coletar arquivos existentes
     final List<XFile> files = [];
@@ -2428,7 +2482,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                             ),
                             onPressed: () => _buildSuccessModal(
                               context,
-                              item['cliente'] ?? '',
+                              Map<String, dynamic>.from(item),
                             ),
                             child: FittedBox(
                               fit: BoxFit.scaleDown,
