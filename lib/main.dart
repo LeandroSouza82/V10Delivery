@@ -83,7 +83,7 @@ class V10DeliveryApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData.light(),
       themeMode: ThemeMode.light,
-      home: RotaMotorista(),
+      home: SplashPage(),
     );
   }
 }
@@ -96,6 +96,151 @@ class MyApp extends StatelessWidget {
     return const V10DeliveryApp();
   }
   
+}
+
+// SplashPage: mostra logo centralizado por 5 segundos e navega
+class SplashPage extends StatefulWidget {
+  const SplashPage({Key? key}) : super(key: key);
+
+  @override
+  _SplashPageState createState() => _SplashPageState();
+}
+
+class _SplashPageState extends State<SplashPage> {
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  Future<void> _start() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final nome = prefs.getString('driver_name');
+      final telefone = prefs.getString('driver_phone');
+
+      // Aguarda 5 segundos mostrando splash
+      await Future.delayed(const Duration(seconds: 5));
+
+      if (!mounted) return;
+      if (nome != null && nome.isNotEmpty && telefone != null && telefone.isNotEmpty) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const RotaMotorista()),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const LoginPage()),
+        );
+      }
+    } catch (e) {
+      // fallback: ir para login
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.blue[900],
+      body: Center(
+        child: Image.asset(
+          'assets/images/preto.png',
+          width: 160,
+          height: 160,
+          fit: BoxFit.contain,
+        ),
+      ),
+    );
+  }
+}
+
+// LoginPage: simples form de nome e telefone
+class LoginPage extends StatefulWidget {
+  const LoginPage({Key? key}) : super(key: key);
+
+  @override
+  _LoginPageState createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final TextEditingController _nomeCtrl = TextEditingController();
+  final TextEditingController _telCtrl = TextEditingController();
+  bool _saving = false;
+
+  Future<void> _onEntrar() async {
+    final nome = _nomeCtrl.text.trim();
+    final tel = _telCtrl.text.trim();
+    if (nome.isEmpty || tel.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha nome e telefone')));
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('driver_name', nome);
+      await prefs.setString('driver_phone', tel);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const RotaMotorista()),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Erro ao salvar dados')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _nomeCtrl.dispose();
+    _telCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black),
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 24),
+              Image.asset('assets/images/preto.png', height: 100),
+              const SizedBox(height: 24),
+              TextField(
+                controller: _nomeCtrl,
+                decoration: const InputDecoration(labelText: 'Nome'),
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _telCtrl,
+                decoration: const InputDecoration(labelText: 'Telefone'),
+                keyboardType: TextInputType.phone,
+                textInputAction: TextInputAction.done,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _saving ? null : _onEntrar,
+                child: _saving ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Entrar'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 Future<void> _enviarWhatsApp(String mensagem, {String? phone}) async {
