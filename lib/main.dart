@@ -455,6 +455,42 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {}
   }
 
+  Widget _buildIndicatorCard({
+    required Color color,
+    required IconData icon,
+    required int count,
+    required String label,
+  }) {
+    return Container(
+      width: 100,
+      height: 100,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: Color(0x4D000000), blurRadius: 6, spreadRadius: 1),
+        ],
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: Colors.white, size: 30),
+          SizedBox(height: 8),
+          Text(
+            '$count',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(label, style: TextStyle(color: Color(0xE6FFFFFF), fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
   // Função que inicia loop do som de chamada (se ainda desejar loop contínuo)
   Future<void> _startChamaLoop() async {
     try {
@@ -1319,7 +1355,7 @@ class RotaMotoristaState extends State<RotaMotorista>
           ),
           child: Column(
             children: [
-              // AppBar simplificada: título centralizado e switch de conexão à direita
+              // AppBar: título central e switch à direita
               Stack(
                 children: [
                   Center(
@@ -1328,68 +1364,40 @@ class RotaMotoristaState extends State<RotaMotorista>
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
                       style: TextStyle(
-                        color: Colors.black87,
+                        color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
                   Align(
-                    alignment: Alignment.centerRight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8.0),
-                          child: Row(
-                            children: [
-                              Text(
-                                modoOffline ? 'OFF' : 'ON',
-                                style: TextStyle(
-                                  color: Colors.black87,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              SizedBox(width: 6),
-                              Switch(
-                                value: modoOffline,
-                                onChanged: (val) async {
-                                  final prefs =
-                                      await SharedPreferences.getInstance();
-                                  await prefs.setBool('modo_offline', val);
-                                  setState(() => modoOffline = val);
-                                  await carregarDados();
-                                  if (!mounted) return;
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                    alignment: Alignment.centerLeft,
+                    child: Builder(
+                      builder: (ctx) => IconButton(
+                        icon: Icon(Icons.menu, color: Colors.white),
+                        onPressed: () => Scaffold.of(ctx).openEndDrawer(),
+                      ),
                     ),
                   ),
                 ],
               ),
               SizedBox(height: 20),
-              // Linha com os três cards indicadores
+              // Row com os três cards indicadores
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Card AZUL para Entregas
                   _buildIndicatorCard(
                     color: Colors.blue,
                     icon: Icons.person,
                     count: totalEntregas,
                     label: 'ENTREGAS',
                   ),
-                  // Card LARANJA para Recolhas
                   _buildIndicatorCard(
                     color: Colors.orange,
                     icon: Icons.inventory_2,
                     count: totalRecolhas,
                     label: 'RECOLHA',
                   ),
-                  // Card LILÁS para Outros
                   _buildIndicatorCard(
                     color: Colors.deepPurpleAccent,
                     icon: Icons.more_horiz,
@@ -1455,6 +1463,20 @@ class RotaMotoristaState extends State<RotaMotorista>
                   ],
                 ),
               ),
+            ),
+            ListTile(
+              leading: Icon(
+                Icons.refresh,
+                color: modoDia ? Colors.black87 : Colors.white70,
+              ),
+              title: Text(
+                'Sincronizar Banco de Dados',
+                style: TextStyle(color: modoDia ? Colors.black : Colors.white),
+              ),
+              onTap: () async {
+                Navigator.pop(context);
+                await carregarDados();
+              },
             ),
             SizedBox.shrink(),
             ListTile(
@@ -1870,40 +1892,52 @@ class RotaMotoristaState extends State<RotaMotorista>
                       builder: (ctx) {
                         // DEBUG: mostrar chaves recebidas do banco
                         try {
-                          print('Colunas disponíveis: ${item.keys}');
+                          debugPrint('Colunas disponíveis: ${item.keys}');
                         } catch (_) {}
 
-                        final avisoTexto =
-                            'Aviso: ' +
-                            (item['observacoes'] ??
-                                item['observacao'] ??
-                                item['obs'] ??
-                                'Sem avisos no DB');
+                        final obs =
+                            item['observacoes'] ??
+                            item['observacao'] ??
+                            item['obs'] ??
+                            '';
+                        final displayText =
+                            'Gestor: ${obs.toString().trim().isNotEmpty ? obs : 'Sem avisos no DB'}';
 
                         return Padding(
                           padding: const EdgeInsets.only(top: 8.0),
-                          child: Text(
-                            avisoTexto,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontStyle: FontStyle.italic,
-                              color:
-                                  (item['observacoes'] ??
-                                              item['observacao'] ??
-                                              item['obs']) !=
-                                          null &&
-                                      (item['observacoes'] ??
-                                              item['observacao'] ??
-                                              item['obs'])
-                                          .toString()
-                                          .trim()
-                                          .isNotEmpty
-                                  ? Colors.redAccent
-                                  : Colors.grey[700]!,
-                              fontWeight: FontWeight.w600,
+                          child: Container(
+                            padding: EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.blue[50],
+                              borderRadius: BorderRadius.only(
+                                topLeft: Radius.circular(12),
+                                topRight: Radius.circular(12),
+                                bottomRight: Radius.circular(12),
+                                bottomLeft: Radius.circular(0),
+                              ),
                             ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.chat_bubble_outline,
+                                  size: 16,
+                                  color: Colors.blueGrey,
+                                ),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    displayText,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.black87,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       },
@@ -2360,51 +2394,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  Widget _buildIndicatorCard({
-    required Color color,
-    required IconData icon,
-    required int count,
-    required String label,
-  }) {
-    return Container(
-      width: 100,
-      height: 100,
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: _corComOpacidade(Colors.black, 0.3),
-            blurRadius: 6,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: Colors.white, size: 30),
-          SizedBox(height: 8),
-          Text(
-            '$count',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: _corComOpacidade(Colors.white, 0.9),
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  // ` _buildIndicatorCard` removed — header simplified and indicators unused
 
   void _abrirModalEsquemasCores(BuildContext context) {
     final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
@@ -2564,13 +2554,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  // Substitui o uso de `.withOpacity(...)` por `Color.fromRGBO(...)`
-  Color _corComOpacidade(Color c, double o) {
-    int alpha = (o * 255).round();
-    if (alpha < 0) alpha = 0;
-    if (alpha > 255) alpha = 255;
-    return c.withAlpha(alpha);
-  }
+  // helper removido: uso de opacidade não é mais necessário
 }
 
 class HistoricoAtividades extends StatelessWidget {
