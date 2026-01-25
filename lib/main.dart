@@ -480,12 +480,38 @@ class RotaMotoristaState extends State<RotaMotorista>
         : lc.contains('recolh')
         ? Colors.orange
         : Colors.deepPurpleAccent;
+    // Determina cores com base no esquema selecionado
+    final Color backgroundColor;
+    final Color textColor;
+    final Color subtitleColor;
+
+    if (_esquemaCores == 1) {
+      // Modo 1 (Cinza)
+      backgroundColor = Colors.grey[800]!;
+      textColor = Colors.white;
+      subtitleColor = Colors.white70;
+    } else if (_esquemaCores == 2) {
+      // Modo 2 (Marrom Claro)
+      backgroundColor = const Color(0xFFD7CCC8);
+      textColor = Colors.black;
+      subtitleColor = Colors.black54;
+    } else if (_esquemaCores == 3) {
+      // Modo 3 (Dia - Destaque)
+      backgroundColor = Colors.grey[100]!;
+      textColor = Colors.black;
+      subtitleColor = Colors.black54;
+    } else {
+      // Fallback (mantém compatibilidade)
+      backgroundColor = const Color(0xFF4E342E);
+      textColor = Colors.white;
+      subtitleColor = Colors.white70;
+    }
 
     return Container(
       width: 100,
       height: 100,
       decoration: BoxDecoration(
-        color: const Color(0xFF4E342E), // marrom escuro
+        color: backgroundColor,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(color: Color(0x4D000000), blurRadius: 6, spreadRadius: 1),
@@ -495,18 +521,18 @@ class RotaMotoristaState extends State<RotaMotorista>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: Colors.white, size: 30),
-          SizedBox(height: 8),
+          Icon(icon, color: textColor, size: 30),
+          const SizedBox(height: 8),
           Text(
             '$count',
             style: TextStyle(
-              color: Colors.white,
+              color: textColor,
               fontSize: 24,
               fontWeight: FontWeight.bold,
             ),
           ),
-          SizedBox(height: 4),
-          Text(label, style: TextStyle(color: Colors.white70, fontSize: 12)),
+          const SizedBox(height: 4),
+          Text(label, style: TextStyle(color: subtitleColor, fontSize: 12)),
         ],
       ),
     );
@@ -1441,7 +1467,9 @@ class RotaMotoristaState extends State<RotaMotorista>
           180.0,
         ), // Altura ajustada para os cards
         child: AnnotatedRegion<SystemUiOverlayStyle>(
-          value: SystemUiOverlayStyle.light,
+          value: modoDia
+              ? SystemUiOverlayStyle.dark
+              : SystemUiOverlayStyle.light,
           child: Container(
             padding: EdgeInsets.only(
               top: MediaQuery.of(
@@ -1451,9 +1479,9 @@ class RotaMotoristaState extends State<RotaMotorista>
               right: 15,
               bottom: 10,
             ),
-            decoration: const BoxDecoration(
-              color: Colors.black,
-            ), // Fundo Total Black
+            decoration: BoxDecoration(
+              color: modoDia ? Colors.white : Colors.black,
+            ),
             child: Column(
               children: [
                 // Linha Superior: Menu, Título e Notificações
@@ -1465,7 +1493,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                       alignment: Alignment.centerLeft,
                       child: Builder(
                         builder: (context) => IconButton(
-                          icon: const Icon(Icons.menu, color: Colors.white),
+                          icon: Icon(
+                            Icons.menu,
+                            color: modoDia ? Colors.black : Colors.white,
+                          ),
                           onPressed: () => Scaffold.of(context).openEndDrawer(),
                         ),
                       ),
@@ -1484,8 +1515,11 @@ class RotaMotoristaState extends State<RotaMotorista>
                       alignment: Alignment.centerRight,
                       child: Stack(
                         children: [
-                          const IconButton(
-                            icon: Icon(Icons.chat_bubble, color: Colors.white),
+                          IconButton(
+                            icon: Icon(
+                              Icons.chat_bubble,
+                              color: modoDia ? Colors.black : Colors.white,
+                            ),
                             onPressed: null, // Aqui abrirá as mensagens depois
                           ),
                           // Badge Vermelho (Aparece se tiver mensagens)
@@ -2795,8 +2829,18 @@ class HistoricoAtividades extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        systemOverlayStyle: SystemUiOverlayStyle.light,
-        title: const Text('Histórico de Atividades'),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.dark,
+          statusBarBrightness: Brightness.light,
+        ),
+        title: const Text(
+          'Histórico de Atividades',
+          style: TextStyle(color: Colors.black),
+        ),
+        iconTheme: const IconThemeData(color: Colors.black),
       ),
       body: Column(
         children: [
