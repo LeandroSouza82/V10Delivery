@@ -1666,30 +1666,38 @@ class RotaMotoristaState extends State<RotaMotorista>
                             child: Text('Nenhuma entrega disponível'),
                           );
                         }
-                        return ReorderableListView.builder(
-                          physics: AlwaysScrollableScrollPhysics(),
-                          buildDefaultDragHandles: false,
-                          proxyDecorator: (child, index, animation) => Material(
-                            elevation: 20,
-                            color: Colors.transparent,
-                            child: child,
+                        return RefreshIndicator(
+                          color: Colors.blue,
+                          onRefresh: carregarDados,
+                          child: ReorderableListView.builder(
+                            physics: AlwaysScrollableScrollPhysics(),
+                            buildDefaultDragHandles: false,
+                            proxyDecorator: (child, index, animation) =>
+                                Material(
+                                  elevation: 20,
+                                  color: Colors.transparent,
+                                  child: child,
+                                ),
+                            itemCount: listaEntregas.length,
+                            onReorder: (old, newIdx) {
+                              setState(() {
+                                if (newIdx > old) newIdx -= 1;
+                                final item = listaEntregas.removeAt(old);
+                                listaEntregas.insert(newIdx, item);
+                                // refletir mudança no estado centralizado
+                                _setEntregas(List<dynamic>.from(listaEntregas));
+                              });
+                            },
+                            itemBuilder: (context, index) =>
+                                ReorderableDelayedDragStartListener(
+                                  key: ValueKey(listaEntregas[index]["id"]),
+                                  index: index,
+                                  child: _buildCard(
+                                    listaEntregas[index],
+                                    index,
+                                  ),
+                                ),
                           ),
-                          itemCount: listaEntregas.length,
-                          onReorder: (old, newIdx) {
-                            setState(() {
-                              if (newIdx > old) newIdx -= 1;
-                              final item = listaEntregas.removeAt(old);
-                              listaEntregas.insert(newIdx, item);
-                              // refletir mudança no estado centralizado
-                              _setEntregas(List<dynamic>.from(listaEntregas));
-                            });
-                          },
-                          itemBuilder: (context, index) =>
-                              ReorderableDelayedDragStartListener(
-                                key: ValueKey(listaEntregas[index]["id"]),
-                                index: index,
-                                child: _buildCard(listaEntregas[index], index),
-                              ),
                         );
                       },
                     ),
@@ -1848,17 +1856,6 @@ class RotaMotoristaState extends State<RotaMotorista>
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
                         color: textPrimary,
-                      ),
-                    ),
-
-                    // Indicação do tipo de serviço (ENTREGA / RECOLHA / OUTROS)
-                    SizedBox(height: 6),
-                    Text(
-                      (item['tipo'] ?? '').toString().toUpperCase(),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: corBarra,
                       ),
                     ),
 
