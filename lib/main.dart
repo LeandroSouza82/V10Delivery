@@ -57,6 +57,15 @@ Future<void> main() async {
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
+  // Tornar a status bar totalmente transparente e ajustar brilho dos ícones
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
+    ),
+  );
+
   // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
 
@@ -585,7 +594,11 @@ class RotaMotoristaState extends State<RotaMotorista>
         _entregas.removeWhere(
           (item) => item['id'].toString() == cardId.toString(),
         );
+        // Recalcula os contadores utilizados pelos mini-cards do cabeçalho
+        _atualizarContadores();
       });
+      // Notifica o stream para atualizar widgets que usam StreamBuilder
+      _notifyEntregasDebounced(entregas);
       Navigator.of(context).pop();
     }
 
@@ -1427,108 +1440,111 @@ class RotaMotoristaState extends State<RotaMotorista>
         preferredSize: const Size.fromHeight(
           180.0,
         ), // Altura ajustada para os cards
-        child: Container(
-          padding: EdgeInsets.only(
-            top: MediaQuery.of(
-              context,
-            ).padding.top, // Respeita a barra de status
-            left: 15,
-            right: 15,
-            bottom: 10,
-          ),
-          decoration: const BoxDecoration(
-            color: Colors.black,
-          ), // Fundo Total Black
-          child: Column(
-            children: [
-              // Linha Superior: Menu, Título e Notificações
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  // Lado Esquerdo: Menu Sanduíche
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Builder(
-                      builder: (context) => IconButton(
-                        icon: const Icon(Icons.menu, color: Colors.white),
-                        onPressed: () => Scaffold.of(context).openEndDrawer(),
+        child: AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle.light,
+          child: Container(
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(
+                context,
+              ).padding.top, // Respeita a barra de status
+              left: 15,
+              right: 15,
+              bottom: 10,
+            ),
+            decoration: const BoxDecoration(
+              color: Colors.black,
+            ), // Fundo Total Black
+            child: Column(
+              children: [
+                // Linha Superior: Menu, Título e Notificações
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Lado Esquerdo: Menu Sanduíche
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Builder(
+                        builder: (context) => IconButton(
+                          icon: const Icon(Icons.menu, color: Colors.white),
+                          onPressed: () => Scaffold.of(context).openEndDrawer(),
+                        ),
                       ),
                     ),
-                  ),
-                  // Centro: Título do App
-                  const Text(
-                    'V10 Delivery',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+                    // Centro: Título do App
+                    const Text(
+                      'V10 Delivery',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  // Lado Direito: Balão de Chat com Badge Vermelho
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Stack(
-                      children: [
-                        const IconButton(
-                          icon: Icon(Icons.chat_bubble, color: Colors.white),
-                          onPressed: null, // Aqui abrirá as mensagens depois
-                        ),
-                        // Badge Vermelho (Aparece se tiver mensagens)
-                        if (mensagensNaoLidas > 0)
-                          Positioned(
-                            right: 8,
-                            top: 8,
-                            child: Container(
-                              padding: const EdgeInsets.all(2),
-                              decoration: BoxDecoration(
-                                color: Colors.red,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              constraints: const BoxConstraints(
-                                minWidth: 16,
-                                minHeight: 16,
-                              ),
-                              child: Text(
-                                mensagensNaoLidas > 9
-                                    ? '9+'
-                                    : '$mensagensNaoLidas',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
+                    // Lado Direito: Balão de Chat com Badge Vermelho
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Stack(
+                        children: [
+                          const IconButton(
+                            icon: Icon(Icons.chat_bubble, color: Colors.white),
+                            onPressed: null, // Aqui abrirá as mensagens depois
+                          ),
+                          // Badge Vermelho (Aparece se tiver mensagens)
+                          if (mensagensNaoLidas > 0)
+                            Positioned(
+                              right: 8,
+                              top: 8,
+                              child: Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: BoxDecoration(
+                                  color: Colors.red,
+                                  borderRadius: BorderRadius.circular(10),
                                 ),
-                                textAlign: TextAlign.center,
+                                constraints: const BoxConstraints(
+                                  minWidth: 16,
+                                  minHeight: 16,
+                                ),
+                                child: Text(
+                                  mensagensNaoLidas > 9
+                                      ? '9+'
+                                      : '$mensagensNaoLidas',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 15),
-              // Linha dos Cards Indicadores (Tudo em Branco/Transparente)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _buildIndicatorCard(
-                    icon: Icons.person,
-                    count: totalEntregas,
-                    label: 'ENTREGAS',
-                  ),
-                  _buildIndicatorCard(
-                    icon: Icons.inventory_2,
-                    count: totalRecolhas,
-                    label: 'RECOLHA',
-                  ),
-                  _buildIndicatorCard(
-                    icon: Icons.more_horiz,
-                    count: totalOutros,
-                    label: 'OUTROS',
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+                const SizedBox(height: 15),
+                // Linha dos Cards Indicadores (Tudo em Branco/Transparente)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _buildIndicatorCard(
+                      icon: Icons.person,
+                      count: totalEntregas,
+                      label: 'ENTREGAS',
+                    ),
+                    _buildIndicatorCard(
+                      icon: Icons.inventory_2,
+                      count: totalRecolhas,
+                      label: 'RECOLHA',
+                    ),
+                    _buildIndicatorCard(
+                      icon: Icons.more_horiz,
+                      count: totalOutros,
+                      label: 'OUTROS',
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -2778,7 +2794,10 @@ class HistoricoAtividades extends StatelessWidget {
     final total = historico.length;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Histórico de Atividades')),
+      appBar: AppBar(
+        systemOverlayStyle: SystemUiOverlayStyle.light,
+        title: const Text('Histórico de Atividades'),
+      ),
       body: Column(
         children: [
           Padding(
