@@ -1,23 +1,25 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:audioplayers/audioplayers.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:internet_connection_checker/internet_connection_checker.dart';
 import 'package:intl/intl.dart';
 import 'package:map_launcher/map_launcher.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:io';
-import 'dart:async';
-import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import 'package:audioplayers/audioplayers.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:internet_connection_checker/internet_connection_checker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:retry/retry.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+
 import 'services/cache_service.dart';
-// dotenv and wakelock removed: chaves agora hardcoded no main()
+import 'widgets/avisos_modal.dart';
 
 // Número do gestor (formato internacional sem +). Configure aqui.
 const String numeroGestor = '5548996525008';
@@ -211,7 +213,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  // signature modal and related session path removed
+  
   String? caminhoFotoSession;
   XFile? fotoEvidencia;
   late AnimationController _buscarController;
@@ -221,9 +223,10 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Avisos do gestor: funções para buscar, marcar e atualizar badge
   Future<List<Map<String, dynamic>>> _buscarAvisos() async {
     try {
-      final res = await Supabase.instance.client
+        final res = await Supabase.instance.client
           .from('avisos_gestor')
           .select('id,titulo,mensagem,created_at,lida')
+          .eq('lida', false)
           .order('created_at', ascending: false);
 
       if (res is List) {
@@ -239,28 +242,16 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   Future<void> _atualizarAvisosNaoLidas() async {
     try {
-      final avisos = await _buscarAvisos();
-      final count = avisos.where((a) {
-        final lida = a['lida'];
-        if (lida is bool) return !lida;
-        return a['lida']?.toString().toLowerCase() != 'true';
-      }).length;
+          final res = await Supabase.instance.client
+            .from('avisos_gestor')
+            .select('id')
+            .eq('lida', false);
+          int count = 0;
+          if (res is List) count = res.length;
       if (!mounted) return;
       setState(() => mensagensNaoLidas = count);
     } catch (e) {
       debugPrint('Erro ao atualizar badge de avisos: $e');
-    }
-  }
-
-  Future<void> _marcarAvisosComoLidos() async {
-    try {
-      await Supabase.instance.client
-          .from('avisos_gestor')
-          .update({'lida': true})
-          .eq('lida', false);
-      await _atualizarAvisosNaoLidas();
-    } catch (e) {
-      debugPrint('Erro ao marcar avisos como lidos: $e');
     }
   }
   // Busca e reconexão
@@ -281,6 +272,10 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Lista inicial vazia — será preenchida por `carregarDados()`
   List<dynamic> entregas = [];
+  // Lista local de avisos (cache curto) — limpa quando houver eventos Realtime
+  List<Map<String, dynamic>> _avisosLocal = <Map<String, dynamic>>[];
+  // Subscription Realtime para avisos_gestor (guardamos para cancelar)
+  dynamic _avisosSubscription;
   // alias getter para compatibilidade com instruções que usam `_entregas`
   List<dynamic> get _entregas => entregas;
   // CONTROLE DO MODAL DE SUCESSO (OK)
@@ -299,7 +294,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     'CORREIO',
   ];
 
-  // removed unused _currentCardIndex
+  
   // Caminho da foto de falha (usado pelo modal de FALHA)
   String? imagemFalha;
   // Motivo selecionado para falha (guardado no estado para reset/inspeção)
@@ -329,7 +324,20 @@ class RotaMotoristaState extends State<RotaMotorista>
     carregarDados();
     // Calcular contadores iniciais (será atualizado após carregarDados)
     _atualizarContadores();
-    // signature controller removed
+    // Atualizar badge de avisos não lidos ao iniciar o app
+    _atualizarAvisosNaoLidas();
+    // Se Realtime não estiver diretamente disponível via cliente, usar polling
+    // curto para garantir atualização imediata do badge quando o DB mudar.
+    try {
+      _avisosSubscription = Timer.periodic(const Duration(seconds: 5), (_) {
+        if (!mounted) return;
+        _avisosLocal.clear();
+        _atualizarAvisosNaoLidas();
+      });
+    } catch (e) {
+      debugPrint('Erro ao iniciar polling de avisos_gestor: $e');
+    }
+    
 
     // animação de procura de rotas (opacidade pulsante)
     _buscarController = AnimationController(
@@ -397,11 +405,17 @@ class RotaMotoristaState extends State<RotaMotorista>
     try {
       WakelockPlus.disable();
     } catch (_) {}
+    // Cancelar polling/subscription de avisos (se houver)
+    try {
+      if (_avisosSubscription is Timer) {
+        (_avisosSubscription as Timer).cancel();
+      }
+    } catch (_) {}
     _buscarController.dispose();
     _audioPlayer.dispose();
     _nomeController.dispose();
     _aptController.dispose();
-    // search controller removed
+    
     _reconnectTimer?.cancel();
     _entregasDebounce?.cancel();
     _cacheDebounce?.cancel();
@@ -449,18 +463,9 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   // TOOLS DE ÁUDIO
-  // ignore: unused_element
-  void _ensureAudioPlayer() {
-    // agora _audioPlayer é final e inicializado na declaração, nada a fazer
-  }
-
   // Única função de modal: `_buildSuccessModal` definida abaixo
 
-  // antigos controles removidos
-
-  // _finalizeDelivery removido (não referenciado)
-
-  // removed unused helper that built WhatsApp message
+  
 
   // Novas funções de áudio conforme especificação
   Future<void> _tocarSomFalha() async {
@@ -498,24 +503,9 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {}
   }
 
-  // ignore: unused_element
-  Future<void> _tocarSomNovoPedido() async {
-    try {
-      await _audioPlayer.setVolume(1.0);
-      await _audioPlayer.stop();
-      // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
-      // serem registrados em pubspec.yaml. Evite alterar esse caminho.
-      await _audioPlayer.play(AssetSource('audios/chama.mp3'));
-      Future.delayed(Duration(seconds: 2), () async {
-        try {
-          await _audioPlayer.stop();
-        } catch (_) {}
-      });
-    } catch (_) {}
-  }
+
 
   Widget _buildIndicatorCard({
-    Color? color,
     required IconData icon,
     required int count,
     required String label,
@@ -1566,116 +1556,14 @@ class RotaMotoristaState extends State<RotaMotorista>
                               Icons.chat_bubble,
                               color: modoDia ? Colors.black : Colors.white,
                             ),
-                            onPressed: () async {
-                              // Ao abrir o modal, marcar avisos como lidos no Supabase
-                              try {
-                                await Supabase.instance.client
-                                    .from('avisos_gestor')
-                                    .update({'lida': true})
-                                    .eq('lida', false);
-                                if (!mounted) return;
-                                setState(() => mensagensNaoLidas = 0);
-                              } catch (e) {
-                                debugPrint('Erro ao marcar avisos como lidos: $e');
-                              }
-
-                              showModalBottomSheet(
+                            onPressed: () {
+                              showAvisosModal(
                                 context: context,
-                                isScrollControlled: true,
-                                backgroundColor: (_esquemaCores == 2 || _esquemaCores == 3)
-                                    ? Colors.white
-                                    : null,
-                                shape: const RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
-                                ),
-                                builder: (ctx) {
-                                  // usar variável local para controlar o future dentro do modal
-                                  var futureAvisos = _buscarAvisos();
-                                  return StatefulBuilder(
-                                    builder: (modalCtx, setModalState) {
-                                      return Container(
-                                        height: MediaQuery.of(modalCtx).size.height * 0.6,
-                                        padding: const EdgeInsets.all(12),
-                                        child: FutureBuilder<List<Map<String, dynamic>>>(
-                                          future: futureAvisos,
-                                          builder: (fCtx, snap) {
-                                            if (snap.connectionState == ConnectionState.waiting) {
-                                              return const Center(child: CircularProgressIndicator());
-                                            }
-                                            final avisos = snap.data ?? [];
-                                            if (avisos.isEmpty) {
-                                              return const Center(
-                                                child: Text('Nenhum aviso no momento', style: TextStyle(color: Colors.black)),
-                                              );
-                                            }
-                                            return ListView.separated(
-                                              itemCount: avisos.length,
-                                              separatorBuilder: (_, __) => const Divider(height: 1),
-                                              itemBuilder: (c, i) {
-                                                final a = avisos[i];
-                                                final String titulo = a['titulo']?.toString() ?? '';
-                                                final String mensagem = a['mensagem']?.toString() ?? '';
-                                                final created = a['created_at'];
-                                                String horario = '';
-                                                try {
-                                                  final dt = DateTime.parse(created.toString()).toLocal();
-                                                  horario = DateFormat('HH:mm').format(dt);
-                                                } catch (_) {
-                                                  horario = '';
-                                                }
-                                                final lida = a['lida'];
-                                                final bool isLida = lida is bool ? lida : (lida?.toString().toLowerCase() == 'true');
-                                                return Card(
-                                                  color: (_esquemaCores == 2 || _esquemaCores == 3) ? Colors.white : Colors.white,
-                                                  child: ListTile(
-                                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                                    title: Text(titulo, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
-                                                    subtitle: Padding(
-                                                      padding: const EdgeInsets.only(top: 6.0),
-                                                      child: Text(mensagem, style: const TextStyle(color: Colors.black)),
-                                                    ),
-                                                    leading: isLida ? null : Container(width: 10, height: 10, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)),
-                                                    trailing: SizedBox(
-                                                      width: 84,
-                                                      child: Row(
-                                                        mainAxisSize: MainAxisSize.min,
-                                                        mainAxisAlignment: MainAxisAlignment.end,
-                                                        children: [
-                                                          if (horario.isNotEmpty) Text(horario, style: const TextStyle(color: Colors.black54)),
-                                                          IconButton(
-                                                            icon: Icon(isLida ? Icons.mark_email_read : Icons.mark_email_unread, color: Colors.black),
-                                                            onPressed: () async {
-                                                              // alterna estado lida para este aviso
-                                                              try {
-                                                                final id = a['id'];
-                                                                final novo = !isLida;
-                                                                await Supabase.instance.client
-                                                                    .from('avisos_gestor')
-                                                                    .update({'lida': novo})
-                                                                    .eq('id', id);
-                                                                // atualizar a lista local no modal
-                                                                setModalState(() => futureAvisos = _buscarAvisos());
-                                                                // atualizar badge no app
-                                                                await _atualizarAvisosNaoLidas();
-                                                              } catch (e) {
-                                                                debugPrint('Erro ao alternar leitura do aviso: $e');
-                                                              }
-                                                            },
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                  ),
-                                                );
-                                              },
-                                            );
-                                          },
-                                        ),
-                                      );
-                                    },
-                                  );
-                                },
-                              ).whenComplete(() => _atualizarAvisosNaoLidas());
+                                buscarAvisos: _buscarAvisos,
+                                atualizarAvisosNaoLidas: _atualizarAvisosNaoLidas,
+                                esquemaCores: _esquemaCores,
+                                modoDia: modoDia,
+                              );
                             },
                           ),
                           // Badge Vermelho (Aparece se tiver mensagens)
