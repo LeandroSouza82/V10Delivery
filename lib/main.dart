@@ -93,6 +93,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return const V10DeliveryApp();
   }
+  
 }
 
 Future<void> _enviarWhatsApp(String mensagem, {String? phone}) async {
@@ -217,6 +218,51 @@ class RotaMotoristaState extends State<RotaMotorista>
   late Animation<double> _buscarOpacity;
   bool modoDia = false;
   int _esquemaCores = 0; // 0 = padrão, 1/2/3 = esquemas
+  // Avisos do gestor: funções para buscar, marcar e atualizar badge
+  Future<List<Map<String, dynamic>>> _buscarAvisos() async {
+    try {
+      final res = await Supabase.instance.client
+          .from('avisos_gestor')
+          .select('id,titulo,mensagem,created_at,lida')
+          .order('created_at', ascending: false);
+
+      if (res is List) {
+        return res
+            .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      }
+    } catch (e) {
+      debugPrint('Erro ao buscar avisos: $e');
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  Future<void> _atualizarAvisosNaoLidas() async {
+    try {
+      final avisos = await _buscarAvisos();
+      final count = avisos.where((a) {
+        final lida = a['lida'];
+        if (lida is bool) return !lida;
+        return a['lida']?.toString().toLowerCase() != 'true';
+      }).length;
+      if (!mounted) return;
+      setState(() => mensagensNaoLidas = count);
+    } catch (e) {
+      debugPrint('Erro ao atualizar badge de avisos: $e');
+    }
+  }
+
+  Future<void> _marcarAvisosComoLidos() async {
+    try {
+      await Supabase.instance.client
+          .from('avisos_gestor')
+          .update({'lida': true})
+          .eq('lida', false);
+      await _atualizarAvisosNaoLidas();
+    } catch (e) {
+      debugPrint('Erro ao marcar avisos como lidos: $e');
+    }
+  }
   // Busca e reconexão
 
   Timer? _reconnectTimer;
@@ -1520,7 +1566,82 @@ class RotaMotoristaState extends State<RotaMotorista>
                               Icons.chat_bubble,
                               color: modoDia ? Colors.black : Colors.white,
                             ),
-                            onPressed: null, // Aqui abrirá as mensagens depois
+                            onPressed: () async {
+                              // Ao abrir o modal, marcar avisos como lidos no Supabase
+                              try {
+                                await Supabase.instance.client
+                                    .from('avisos_gestor')
+                                    .update({'lida': true})
+                                    .eq('lida', false);
+                                if (!mounted) return;
+                                setState(() => mensagensNaoLidas = 0);
+                              } catch (e) {
+                                debugPrint('Erro ao marcar avisos como lidos: $e');
+                              }
+
+                              showModalBottomSheet(
+                                context: context,
+                                isScrollControlled: true,
+                                backgroundColor: (_esquemaCores == 2 || _esquemaCores == 3)
+                                    ? Colors.white
+                                    : null,
+                                shape: const RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+                                ),
+                                builder: (ctx) {
+                                  return Container(
+                                    height: MediaQuery.of(ctx).size.height * 0.6,
+                                    padding: const EdgeInsets.all(12),
+                                    child: FutureBuilder<List<Map<String, dynamic>>>(
+                                      future: _buscarAvisos(),
+                                      builder: (fCtx, snap) {
+                                        if (snap.connectionState == ConnectionState.waiting) {
+                                          return const Center(child: CircularProgressIndicator());
+                                        }
+                                        final avisos = snap.data ?? [];
+                                        if (avisos.isEmpty) {
+                                          return const Center(
+                                            child: Text('Nenhum aviso no momento', style: TextStyle(color: Colors.black)),
+                                          );
+                                        }
+                                        return ListView.separated(
+                                          itemCount: avisos.length,
+                                          separatorBuilder: (_, __) => const Divider(height: 1),
+                                          itemBuilder: (c, i) {
+                                            final a = avisos[i];
+                                            final String titulo = a['titulo']?.toString() ?? '';
+                                            final String mensagem = a['mensagem']?.toString() ?? '';
+                                            final created = a['created_at'];
+                                            String horario = '';
+                                            try {
+                                              final dt = DateTime.parse(created.toString()).toLocal();
+                                              horario = DateFormat('HH:mm').format(dt);
+                                            } catch (_) {
+                                              horario = '';
+                                            }
+                                            final lida = a['lida'];
+                                            final bool isLida = lida is bool ? lida : (lida?.toString().toLowerCase() == 'true');
+                                            return Card(
+                                              color: (_esquemaCores == 2 || _esquemaCores == 3) ? Colors.white : Colors.white,
+                                              child: ListTile(
+                                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                                title: Text(titulo, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
+                                                subtitle: Padding(
+                                                  padding: const EdgeInsets.only(top: 6.0),
+                                                  child: Text(mensagem, style: const TextStyle(color: Colors.black)),
+                                                ),
+                                                trailing: horario.isNotEmpty ? Text(horario, style: const TextStyle(color: Colors.black54)) : null,
+                                                leading: isLida ? null : Container(width: 10, height: 10, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)),
+                                              ),
+                                            );
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  );
+                                },
+                              ).whenComplete(() => _atualizarAvisosNaoLidas());
+                            },
                           ),
                           // Badge Vermelho (Aparece se tiver mensagens)
                           if (mensagensNaoLidas > 0)
