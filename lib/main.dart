@@ -147,7 +147,7 @@ class RotaMotorista extends StatefulWidget {
 }
 
 class RotaMotoristaState extends State<RotaMotorista>
-    with SingleTickerProviderStateMixin {
+  with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final String nomeMotorista = "LEANDRO";
   String? _avatarPath;
 
@@ -223,17 +223,16 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Avisos do gestor: funções para buscar, marcar e atualizar badge
   Future<List<Map<String, dynamic>>> _buscarAvisos() async {
     try {
-        final res = await Supabase.instance.client
-          .from('avisos_gestor')
-          .select('id,titulo,mensagem,created_at,lida')
-          .eq('lida', false)
-          .order('created_at', ascending: false);
+          final res = await Supabase.instance.client
+            .from('avisos_gestor')
+            .select('id,titulo,mensagem,created_at,lida')
+            .eq('lida', false)
+            .order('created_at', ascending: false);
 
-      if (res is List) {
-        return res
+          final list = res as List<dynamic>? ?? <dynamic>[];
+          return list
             .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-      }
     } catch (e) {
       debugPrint('Erro ao buscar avisos: $e');
     }
@@ -246,10 +245,12 @@ class RotaMotoristaState extends State<RotaMotorista>
             .from('avisos_gestor')
             .select('id')
             .eq('lida', false);
-          int count = 0;
-          if (res is List) count = res.length;
+          final list = res as List<dynamic>? ?? <dynamic>[];
+          final int count = list.length;
       if (!mounted) return;
-      setState(() => mensagensNaoLidas = count);
+      setState(() {
+        mensagensNaoLidas = count;
+      });
     } catch (e) {
       debugPrint('Erro ao atualizar badge de avisos: $e');
     }
@@ -273,9 +274,17 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Lista inicial vazia — será preenchida por `carregarDados()`
   List<dynamic> entregas = [];
   // Lista local de avisos (cache curto) — limpa quando houver eventos Realtime
-  List<Map<String, dynamic>> _avisosLocal = <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> _avisosLocal = <Map<String, dynamic>>[];
   // Subscription Realtime para avisos_gestor (guardamos para cancelar)
   dynamic _avisosSubscription;
+  // Polling fallback para entregas quando Realtime não funcionar
+  // Inicializar com 0 para que um novo registro com id=1 seja detectado
+  int _lastEntregaId = 0;
+  // Controle para evitar tocar som no primeiro carregamento
+  int _totalEntregasAntigo = -1;
+  // Controller para rolar a lista de entregas quando novos pedidos chegarem
+  late ScrollController _entregasScrollController;
+  Timer? _entregasPollingTimer;
   // alias getter para compatibilidade com instruções que usam `_entregas`
   List<dynamic> get _entregas => entregas;
   // CONTROLE DO MODAL DE SUCESSO (OK)
@@ -313,6 +322,7 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   @override
   void initState() {
+    WidgetsBinding.instance.addObserver(this);
     // iniciar cache service (não bloqueante)
     CacheService().init().catchError((e) => debugPrint('Cache init error: $e'));
     // Manter a tela acesa enquanto o app estiver em primeiro plano
@@ -320,6 +330,17 @@ class RotaMotoristaState extends State<RotaMotorista>
       WakelockPlus.enable();
     } catch (_) {}
     super.initState();
+    // Garantir cache limpo e lista inicial vazia (teste: DB reiniciado com id=1)
+    CacheService().saveEntregas(<Map<String, dynamic>>[]).then((_) {
+      if (!mounted) return;
+      setState(() {
+        entregas = [];
+        _lastEntregaId = 0;
+      });
+    }).catchError((e) {
+      debugPrint('Erro limpando cache local antes do run: $e');
+    });
+
     // Chamar carregarDados() primeiro para popular a lista vinda do Supabase
     carregarDados();
     // Calcular contadores iniciais (será atualizado após carregarDados)
@@ -336,6 +357,83 @@ class RotaMotoristaState extends State<RotaMotorista>
       });
     } catch (e) {
       debugPrint('Erro ao iniciar polling de avisos_gestor: $e');
+    }
+
+    // Registrar polling curto para verificar novos pedidos na tabela `entregas`.
+    try {
+      _entregasScrollController = ScrollController();
+      _entregasPollingTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+        try {
+          // Buscar lista recente (limitada) e comparar tamanho com a lista local
+          final res = await Supabase.instance.client
+              .from('entregas')
+              .select('*')
+              .eq('motorista_id', '1')
+              .order('id', ascending: false)
+              .limit(50);
+          final list = res as List<dynamic>? ?? <dynamic>[];
+
+          // Normalizar para o mesmo formato usado em _setEntregas
+          final novaLista = list.map<Map<String, String>>((e) {
+            final m = Map<String, dynamic>.from(e as Map);
+            return {
+              'id': m['id']?.toString() ?? '',
+              'cliente': m['cliente']?.toString() ?? '',
+              'endereco': m['endereco']?.toString() ?? '',
+              'tipo': m['tipo']?.toString() ?? 'entrega',
+              'status': m['status']?.toString() ?? '',
+              'obs': m['obs']?.toString() ?? '',
+              'observacoes': m['observacoes']?.toString() ?? m['observacao']?.toString() ?? m['obs']?.toString() ?? '',
+            };
+          }).toList();
+
+          // Gestão de som: não tocar no primeiro carregamento
+          if (_totalEntregasAntigo == -1) {
+            // primeira vez: apenas inicializar o contador sem tocar
+            if (!mounted) return;
+            setState(() {
+              entregas = List<dynamic>.from(novaLista);
+              _atualizarContadores();
+              _totalEntregasAntigo = novaLista.length;
+            });
+            // garantir que o StreamBuilder receba o novo valor imediatamente
+            try {
+              if (!_entregasController.isClosed) _entregasController.add(entregas);
+            } catch (_) {}
+          } else if (novaLista.length > _totalEntregasAntigo) {
+            debugPrint('CHEGOU NOVO PEDIDO: quantidade anterior=${_totalEntregasAntigo} nova=${novaLista.length}');
+            try {
+              await _tocarSomSucesso();
+            } catch (_) {}
+            // Atualizar lista centralizada e contador dentro de setState
+            if (!mounted) return;
+            setState(() {
+              entregas = List<dynamic>.from(novaLista);
+              _atualizarContadores();
+              _totalEntregasAntigo = novaLista.length;
+            });
+            // garantir que o StreamBuilder receba o novo valor imediatamente
+            try {
+              if (!_entregasController.isClosed) _entregasController.add(entregas);
+            } catch (_) {}
+            // rolar para o topo para mostrar o novo card
+            try {
+              if (_entregasScrollController.hasClients) {
+                _entregasScrollController.animateTo(0.0,
+                    duration: Duration(milliseconds: 400), curve: Curves.easeOut);
+              }
+            } catch (_) {}
+            // Atualizar _lastEntregaId com o primeiro item, se existir
+            final firstId = int.tryParse(novaLista.first['id'] ?? '') ?? 0;
+            if (firstId > 0) _lastEntregaId = firstId;
+          }
+          debugPrint('STATUS REALTIME: polling (entregas)');
+        } catch (e) {
+          debugPrint('Erro no polling entregas: $e');
+        }
+      });
+    } catch (e) {
+      debugPrint('Erro ao iniciar polling de entregas: $e');
     }
     
 
@@ -395,8 +493,14 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
     });
     // Carregar dados iniciais do Supabase (chamado acima após inicialização)
-
+    // Carregar dados iniciais do Supabase (chamado acima após inicialização)
     // Busca removida: não inicializar listener
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Não cancelamos timers ao pausar; apenas registramos o estado para debug.
+    debugPrint('AppLifecycleState changed: $state');
   }
 
   @override
@@ -411,8 +515,16 @@ class RotaMotoristaState extends State<RotaMotorista>
         (_avisosSubscription as Timer).cancel();
       }
     } catch (_) {}
+    try {
+      if (_entregasPollingTimer != null) {
+        _entregasPollingTimer?.cancel();
+      }
+    } catch (_) {}
     _buscarController.dispose();
     _audioPlayer.dispose();
+    try {
+      _entregasScrollController.dispose();
+    } catch (_) {}
     _nomeController.dispose();
     _aptController.dispose();
     
@@ -420,6 +532,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     _entregasDebounce?.cancel();
     _cacheDebounce?.cancel();
     _entregasController.close();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -489,7 +602,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       await _audioPlayer.stop();
       // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
       // serem registrados em pubspec.yaml. Evite alterar esse caminho.
-      await _audioPlayer.play(AssetSource('audios/sucesso.mp3'));
+      await _audioPlayer.play(AssetSource('audios/chama.mp3'));
     } catch (_) {}
   }
 
@@ -1258,33 +1371,21 @@ class RotaMotoristaState extends State<RotaMotorista>
       delayFactor: const Duration(seconds: 2),
     );
 
+
     try {
-      // Tentativa com retry/backoff: ordenar por 'ordem_entrega' quando disponível;
-      // caso a coluna não exista ou ocorra erro do PostgREST, efetua fallback para 'id'.
-      dynamic response;
-      try {
-        response = await r.retry(() async {
-          return await Supabase.instance.client
-              .from('entregas')
-              .select('*')
-              .or('status.eq.pendente,status.eq.em_rota')
-              .order('ordem_entrega', ascending: true);
-        }, retryIf: (e) => e is SocketException || e is TimeoutException);
-      } catch (e) {
-        // fallback para ordenar por 'id' se a coluna específica não existir
-        response = await r.retry(() async {
-          return await Supabase.instance.client
-              .from('entregas')
-              .select('*')
-              .or('status.eq.pendente,status.eq.em_rota')
-              .order('id', ascending: true);
-        }, retryIf: (e) => e is SocketException || e is TimeoutException);
-      }
+      // Fazer query ordenando por `id` desc para trazer os pedidos mais recentes primeiro
+      dynamic response = await r.retry(() async {
+        return await Supabase.instance.client
+            .from('entregas')
+            .select('*')
+            .or('status.eq.pendente,status.eq.em_rota')
+            .order('id', ascending: false);
+      }, retryIf: (e) => e is SocketException || e is TimeoutException);
 
       if (!mounted) return;
 
       final listaRaw = response as List<dynamic>?;
-      if (listaRaw != null) {
+        if (listaRaw != null) {
         final lista = listaRaw.map<Map<String, String>>((e) {
           final m = Map<String, dynamic>.from(e as Map);
           return {
@@ -1304,10 +1405,19 @@ class RotaMotoristaState extends State<RotaMotorista>
           };
         }).toList();
 
-        // Atualizar estado centralizado via _setEntregas para notificar stream/UI
+        // A lista já vem ordenada por id desc; atualizar estado substituindo a lista
         _setEntregas(List<dynamic>.from(lista));
         _atualizarContadores();
-        setState(() => modoOffline = false);
+        setState(() {
+          modoOffline = false;
+          // Se ainda não inicializamos o contador antigo, setar para o tamanho atual
+          if (_totalEntregasAntigo == -1) {
+            _totalEntregasAntigo = lista.length;
+          }
+        });
+        // forçar rebuild adicional para garantir atualização imediata da UI
+        if (mounted) setState(() {});
+        debugPrint('Lista atualizada com ${lista.length} pedidos');
 
         // Salvar em cache local para uso offline (debounced)
         _saveToCacheDebounced(lista);
@@ -1914,6 +2024,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                           color: Colors.blue,
                           onRefresh: carregarDados,
                           child: ReorderableListView.builder(
+                            scrollController: _entregasScrollController,
                             physics: AlwaysScrollableScrollPhysics(),
                             buildDefaultDragHandles: false,
                             proxyDecorator: (child, index, animation) =>
