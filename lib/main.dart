@@ -118,12 +118,13 @@ class _SplashPageState extends State<SplashPage> {
       final prefs = await SharedPreferences.getInstance();
       final nome = prefs.getString('driver_name');
       final telefone = prefs.getString('driver_phone');
+      final stay = prefs.getBool('stay_logged_in') ?? false;
 
       // Aguarda 5 segundos mostrando splash
       await Future.delayed(const Duration(seconds: 5));
 
       if (!mounted) return;
-      if (nome != null && nome.isNotEmpty && telefone != null && telefone.isNotEmpty) {
+      if (nome != null && nome.isNotEmpty && telefone != null && telefone.isNotEmpty && stay) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const RotaMotorista()),
         );
@@ -144,13 +145,20 @@ class _SplashPageState extends State<SplashPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.blue[900],
+      backgroundColor: const Color(0xFF0D47A1),
       body: Center(
-        child: Image.asset(
-          'assets/images/preto.png',
-          width: 160,
-          height: 160,
-          fit: BoxFit.contain,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Image.asset(
+            'assets/images/preto.png',
+            width: 160,
+            height: 160,
+            fit: BoxFit.contain,
+          ),
         ),
       ),
     );
@@ -169,6 +177,7 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController _nomeCtrl = TextEditingController();
   final TextEditingController _telCtrl = TextEditingController();
   bool _saving = false;
+  bool _stayLogged = false;
 
   Future<void> _onEntrar() async {
     final nome = _nomeCtrl.text.trim();
@@ -182,6 +191,7 @@ class _LoginPageState extends State<LoginPage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('driver_name', nome);
       await prefs.setString('driver_phone', tel);
+      await prefs.setBool('stay_logged_in', _stayLogged);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const RotaMotorista()),
@@ -230,10 +240,55 @@ class _LoginPageState extends State<LoginPage> {
                 keyboardType: TextInputType.phone,
                 textInputAction: TextInputAction.done,
               ),
+              const SizedBox(height: 8),
+              // Manter-se logado e Sair alinhados à esquerda
+              Row(
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Checkbox(
+                            value: _stayLogged,
+                            onChanged: (v) => setState(() => _stayLogged = v ?? false),
+                          ),
+                          const SizedBox(width: 4),
+                          const Text('Manter-se logado'),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 24),
               ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0D47A1),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
                 onPressed: _saving ? null : _onEntrar,
-                child: _saving ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Entrar'),
+                child: _saving
+                    ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Entrar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(height: 8),
+              // Linha com botão Sair alinhado à esquerda
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () {
+                    // limpar campos
+                    setState(() {
+                      _nomeCtrl.clear();
+                      _telCtrl.clear();
+                      _stayLogged = false;
+                    });
+                  },
+                  child: const Text('Sair'),
+                ),
               ),
             ],
           ),
