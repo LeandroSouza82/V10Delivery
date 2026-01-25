@@ -57,14 +57,6 @@ Future<void> main() async {
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-  // Status bar: transparente com ícones brancos
-  SystemChrome.setSystemUIOverlayStyle(
-    SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-    ),
-  );
-
   // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
 
@@ -263,6 +255,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   int totalEntregas = 0;
   int totalRecolhas = 0;
   int totalOutros = 0;
+  // Contador de mensagens não lidas (usado pelo badge no appBar)
+  int mensagensNaoLidas = 0;
   String? _selectedMapName;
 
   @override
@@ -464,21 +458,28 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   Widget _buildIndicatorCard({
-    required Color color,
+    Color? color,
     required IconData icon,
     required int count,
     required String label,
   }) {
+    final lc = label.toLowerCase();
+    final borderColor = lc.contains('entrega')
+        ? Colors.blue
+        : lc.contains('recolh')
+        ? Colors.orange
+        : Colors.deepPurpleAccent;
+
     return Container(
       width: 100,
       height: 100,
       decoration: BoxDecoration(
-        color: Colors.white10,
+        color: const Color(0xFF4E342E), // marrom escuro
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withAlpha(230), width: 1),
         boxShadow: [
           BoxShadow(color: Color(0x4D000000), blurRadius: 6, spreadRadius: 1),
         ],
+        border: Border.all(color: borderColor, width: 2.0),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -1350,72 +1351,107 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   @override
   Widget build(BuildContext context) {
-    SystemChrome.setSystemUIOverlayStyle(
-      const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.light,
-        statusBarBrightness: Brightness.dark,
-      ),
-    );
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: PreferredSize(
-        preferredSize: Size.fromHeight(200.0),
+        preferredSize: const Size.fromHeight(
+          180.0,
+        ), // Altura ajustada para os cards
         child: Container(
-          decoration: BoxDecoration(color: Colors.black),
           padding: EdgeInsets.only(
-            top: MediaQuery.of(context).padding.top,
-            left: 20,
-            right: 20,
-            bottom: 16,
+            top: MediaQuery.of(
+              context,
+            ).padding.top, // Respeita a barra de status
+            left: 15,
+            right: 15,
+            bottom: 10,
           ),
+          decoration: const BoxDecoration(
+            color: Colors.black,
+          ), // Fundo Total Black
           child: Column(
             children: [
-              // AppBar: título central e switch à direita
+              // Linha Superior: Menu, Título e Notificações
               Stack(
+                alignment: Alignment.center,
                 children: [
-                  Center(
-                    child: Text(
-                      'V10 Delivery',
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
+                  // Lado Esquerdo: Menu Sanduíche
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Builder(
                       builder: (ctx) => IconButton(
-                        icon: Icon(Icons.menu, color: Colors.white),
+                        icon: const Icon(Icons.menu, color: Colors.white),
                         onPressed: () => Scaffold.of(ctx).openEndDrawer(),
                       ),
                     ),
                   ),
+                  // Centro: Título do App
+                  const Text(
+                    'V10 Delivery',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  // Lado Direito: Balão de Chat com Badge Vermelho
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Stack(
+                      children: [
+                        const IconButton(
+                          icon: Icon(Icons.chat_bubble, color: Colors.white),
+                          onPressed: null, // Aqui abrirá as mensagens depois
+                        ),
+                        // Badge Vermelho (Aparece se tiver mensagens)
+                        if (mensagensNaoLidas > 0)
+                          Positioned(
+                            right: 8,
+                            top: 8,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: Colors.red,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              constraints: const BoxConstraints(
+                                minWidth: 16,
+                                minHeight: 16,
+                              ),
+                              child: Text(
+                                mensagensNaoLidas > 9
+                                    ? '9+'
+                                    : '$mensagensNaoLidas',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
-              SizedBox(height: 20),
-              // Row com os três cards indicadores
+              const SizedBox(height: 15),
+              // Linha dos Cards Indicadores (Tudo em Branco/Transparente)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _buildIndicatorCard(
-                    color: Colors.blue,
                     icon: Icons.person,
                     count: totalEntregas,
                     label: 'ENTREGAS',
                   ),
                   _buildIndicatorCard(
-                    color: Colors.orange,
                     icon: Icons.inventory_2,
                     count: totalRecolhas,
                     label: 'RECOLHA',
                   ),
                   _buildIndicatorCard(
-                    color: Colors.deepPurpleAccent,
                     icon: Icons.more_horiz,
                     count: totalOutros,
                     label: 'OUTROS',
@@ -1754,15 +1790,17 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   Widget _buildCard(Map<String, String> item, int index) {
     // Normalizar 'tipo' antes da comparação e debugar o valor exato recebido
-    final tipoTratado = item['tipo'].toString().trim().toLowerCase();
+    final tipoTratado = (item['tipo'] ?? '').toString().trim().toLowerCase();
     debugPrint('Tipo recebido: |${item['tipo']}|');
 
-    // Fixar cor da barra lateral conforme tipo (mantém indicador colorido)
-    final corItem = tipoTratado.contains('entrega')
+    // Fixar cor da barra lateral conforme tipo (ENTREGA, RECOLHA, OUTROS)
+    final corItem = tipoTratado == 'entrega'
         ? Colors.blue
-        : tipoTratado.contains('recolh')
+        : tipoTratado == 'recolha'
         ? Colors.orange
-        : Colors.purple;
+        : tipoTratado == 'outros'
+        ? Colors.deepPurpleAccent
+        : Colors.grey;
     final Color corBarra = corItem;
 
     final bool pressed = _pressedIndices.contains(index);
