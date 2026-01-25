@@ -396,6 +396,10 @@ class RotaMotoristaState extends State<RotaMotorista>
               _atualizarContadores();
               _totalEntregasAntigo = novaLista.length;
             });
+            // salvar em cache local (debounced) para uso offline
+            try {
+              _saveToCacheDebounced(novaLista);
+            } catch (_) {}
             // garantir que o StreamBuilder receba o novo valor imediatamente
             try {
               if (!_entregasController.isClosed) _entregasController.add(entregas);
@@ -412,6 +416,10 @@ class RotaMotoristaState extends State<RotaMotorista>
               _atualizarContadores();
               _totalEntregasAntigo = novaLista.length;
             });
+            // salvar em cache local (debounced) para uso offline
+            try {
+              _saveToCacheDebounced(novaLista);
+            } catch (_) {}
             // garantir que o StreamBuilder receba o novo valor imediatamente
             try {
               if (!_entregasController.isClosed) _entregasController.add(entregas);
