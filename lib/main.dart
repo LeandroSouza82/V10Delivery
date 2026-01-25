@@ -1734,7 +1734,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             blurRadius: 16,
           ),
         ],
-        border: Border.all(color: corBarra.withValues(alpha: 0.18), width: 1.0),
+        border: Border.all(color: corBarra, width: 2.0),
       ),
       // Ajuste do padding do card
       padding: EdgeInsets.all(20),
@@ -1862,38 +1862,49 @@ class RotaMotoristaState extends State<RotaMotorista>
                       ),
                     ),
 
-                    // Observações/aviso do gestor (campo 'observacoes' específico)
-                    Builder(builder: (ctx) {
-                      final obs = (item['observacoes'] ?? '').toString().trim();
-                      if (obs.isEmpty) return SizedBox.shrink();
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Text.rich(
-                          TextSpan(
-                            children: [
-                              TextSpan(
-                                text: 'Obs: ',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                  color: Colors.redAccent,
+                    // Observações/aviso do gestor (usar obrigatoriamente 'observacoes')
+                    Builder(
+                      builder: (ctx) {
+                        final obs = (item['observacoes'] ?? '')
+                            .toString()
+                            .trim();
+                        final bool temObs = obs.isNotEmpty;
+                        final Color corObs = temObs
+                            ? Colors.redAccent
+                            : Colors.grey[700]!;
+                        final String prefix = temObs ? 'Aviso: ' : 'Obs: ';
+                        final String texto = temObs ? obs : 'Sem avisos';
+
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: prefix,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontStyle: FontStyle.italic,
+                                    color: corObs,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
-                              ),
-                              TextSpan(
-                                text: obs,
-                                style: TextStyle(
-                                  fontStyle: FontStyle.italic,
-                                  fontSize: 12,
-                                  color: Colors.redAccent,
+                                TextSpan(
+                                  text: texto,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontStyle: FontStyle.italic,
+                                    color: corObs,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      );
-                    }),
+                        );
+                      },
+                    ),
 
                     SizedBox(height: 8),
 
@@ -1960,7 +1971,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                             onPressed: () => _abrirMapaComPreferencia(
                               item['endereco'] ?? '',
                             ),
-                            child: Text('ROTA'),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text('ROTA'),
+                            ),
                           ),
                         ),
 
@@ -2293,7 +2307,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 },
                               );
                             },
-                            child: Text('FALHA'),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text('FALHA'),
+                            ),
                           ),
                         ),
 
@@ -2322,7 +2339,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                               context,
                               item['cliente'] ?? '',
                             ),
-                            child: Text('OK'),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text('OK'),
+                            ),
                           ),
                         ),
                       ],
