@@ -100,10 +100,10 @@ class MyApp extends StatelessWidget {
 
 // SplashPage: mostra logo centralizado por 5 segundos e navega
 class SplashPage extends StatefulWidget {
-  const SplashPage({Key? key}) : super(key: key);
+  const SplashPage({super.key});
 
   @override
-  _SplashPageState createState() => _SplashPageState();
+  State<SplashPage> createState() => _SplashPageState();
 }
 
 class _SplashPageState extends State<SplashPage> {
@@ -167,10 +167,10 @@ class _SplashPageState extends State<SplashPage> {
 
 // LoginPage: simples form de nome e telefone
 class LoginPage extends StatefulWidget {
-  const LoginPage({Key? key}) : super(key: key);
+  const LoginPage({super.key});
 
   @override
-  _LoginPageState createState() => _LoginPageState();
+  State<LoginPage> createState() => _LoginPageState();
 }
 
 class _LoginPageState extends State<LoginPage> {
@@ -197,7 +197,9 @@ class _LoginPageState extends State<LoginPage> {
         MaterialPageRoute(builder: (_) => const RotaMotorista()),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Erro ao salvar dados')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Erro ao salvar dados')));
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -479,6 +481,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   dynamic _avisosSubscription;
   // Polling fallback para entregas quando Realtime não funcionar
   // Inicializar com 0 para que um novo registro com id=1 seja detectado
+  // ignore: unused_field
   int _lastEntregaId = 0;
   // Controle para evitar tocar som no primeiro carregamento
   int _totalEntregasAntigo = -1;
@@ -608,7 +611,7 @@ class RotaMotoristaState extends State<RotaMotorista>
               if (!_entregasController.isClosed) _entregasController.add(entregas);
             } catch (_) {}
           } else if (novaLista.length > _totalEntregasAntigo) {
-            debugPrint('CHEGOU NOVO PEDIDO: quantidade anterior=${_totalEntregasAntigo} nova=${novaLista.length}');
+            debugPrint('CHEGOU NOVO PEDIDO: quantidade anterior=$_totalEntregasAntigo nova=${novaLista.length}');
             try {
               await _tocarSomSucesso();
             } catch (_) {}
@@ -1327,6 +1330,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       }
 
                                       // fechar modal e remover localmente
+                                      if (!mounted) return;
                                       Navigator.pop(context);
                                       setState(() {
                                         entregas.removeWhere(
@@ -1359,18 +1363,21 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     final m = RegExp(
                                       r'column "([^"]+)"',
                                     ).firstMatch(err);
-                                    if (m != null)
+                                    if (m != null) {
                                       debugPrint(
                                         'Coluna não encontrada no banco: ${m.group(1)}',
                                       );
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          '❌ Falha ao salvar no banco: ${err.split('\n').first}',
+                                    }
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            '❌ Falha ao salvar no banco: ${err.split('\n').first}',
+                                          ),
+                                          backgroundColor: Colors.red,
                                         ),
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    );
+                                      );
+                                    }
                                   }
                                 }
                               : null,
