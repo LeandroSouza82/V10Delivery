@@ -20,6 +20,8 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'services/cache_service.dart';
 import 'widgets/avisos_modal.dart';
+import 'package:v10_delivery/auth_pages.dart';
+import 'globals.dart';
 
 // Número do gestor (formato internacional sem +). Configure aqui.
 const String numeroGestor = '5548996525008';
@@ -95,7 +97,6 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return const V10DeliveryApp();
   }
-  
 }
 
 // SplashPage: mostra logo centralizado por 5 segundos e navega
@@ -110,35 +111,138 @@ class _SplashPageState extends State<SplashPage> {
   @override
   void initState() {
     super.initState();
+    // Carregar nome do motorista salvo nas prefs para evitar persistência incorreta
+    _loadSavedName();
     _start();
+  }
+
+  Future<void> _loadSavedName() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('driver_name') ?? '';
+      if (saved.isNotEmpty) {
+        nomeMotorista = saved;
+        if (mounted) setState(() {});
+      }
+    } catch (e) {
+      debugPrint('Erro ao carregar driver_name nas prefs: $e');
+    }
   }
 
   Future<void> _start() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final nome = prefs.getString('driver_name');
       final telefone = prefs.getString('driver_phone');
-      final stay = prefs.getBool('stay_logged_in') ?? false;
+      // Limpar máscara do telefone antes de consultar o banco
+      final telLimpo = telefone?.replaceAll(RegExp(r'\D'), '') ?? '';
 
       // Aguarda 5 segundos mostrando splash
       await Future.delayed(const Duration(seconds: 5));
 
       if (!mounted) return;
-      if (nome != null && nome.isNotEmpty && telefone != null && telefone.isNotEmpty && stay) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const RotaMotorista()),
-        );
+
+      // Se há telefone salvo, sempre tentar checar o status no Supabase.
+      if (telefone != null && telefone.isNotEmpty) {
+        // Verificar no Supabase se o acesso ainda é aprovado
+        try {
+          final client = Supabase.instance.client;
+          debugPrint('DEBUG SPLASH: Buscando por $telLimpo');
+          // Tentar usar created_at para pegar o registro mais recente; se a coluna
+          // não existir (schema alternativo), fazer fallback por id desc.
+          List<dynamic> res = <dynamic>[];
+          try {
+            final dynamic q = await client
+                .from('motoristas')
+                .select('nome,acesso,created_at')
+                .eq('telefone', telLimpo)
+                .order('created_at', ascending: false)
+                .limit(1);
+            res = q is List ? q : [];
+          } catch (e) {
+            debugPrint(
+              'DEBUG SPLASH: created_at não disponível, fallback por id: $e',
+            );
+            try {
+              final dynamic q2 = await client
+                  .from('motoristas')
+                  .select('nome,acesso,id')
+                  .eq('telefone', telLimpo)
+                  .order('id', ascending: false)
+                  .limit(1);
+              res = q2 is List ? q2 : [];
+            } catch (e2) {
+              debugPrint('DEBUG SPLASH: Erro na query fallback: $e2');
+            }
+          }
+
+          if (res.isNotEmpty) {
+            final record = res.first as Map<String, dynamic>;
+            final dbAcesso = (record['acesso'] ?? '').toString().toLowerCase();
+            final dbNome = (record['nome'] ?? '').toString();
+            debugPrint(
+              'DEBUG SPLASH: Status no banco: ${record['acesso']} nome: $dbNome',
+            );
+
+            // Atualizar preferências locais com o nome vindo do DB
+            try {
+              final prefsUpdate = await SharedPreferences.getInstance();
+              if (dbNome.isNotEmpty) {
+                await prefsUpdate.setString('driver_name', dbNome);
+                // atualizar nome em memória
+                nomeMotorista = dbNome;
+                // salvar id do motorista
+                final recId = record['id'] is int
+                    ? record['id'] as int
+                    : int.tryParse(record['id'].toString()) ?? 0;
+                if (recId > 0) {
+                  await prefsUpdate.setInt('driver_id', recId);
+                  idLogado = recId;
+                }
+              }
+            } catch (e) {
+              debugPrint('DEBUG SPLASH: Erro ao atualizar nome nas prefs: $e');
+            }
+
+            if (dbAcesso == 'aprovado') {
+              if (!mounted) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (_) => const RotaMotorista()),
+              );
+              return;
+            }
+          } else {
+            debugPrint(
+              'DEBUG SPLASH: Nenhum registro encontrado para $telLimpo',
+            );
+          }
+        } catch (e) {
+          debugPrint('DEBUG SPLASH: Erro ao consultar Supabase: $e');
+          // erro na verificação: seguir para login por segurança
+        }
+        // Se não aprovado ou erro, limpar prefs e ir para login
+        try {
+          await prefs.clear();
+          idLogado = null;
+        } catch (_) {}
+        if (!mounted) return;
+        Navigator.of(
+          context,
+        ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
+        return;
       } else {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const LoginPage()),
-        );
+        // Sem telefone salvo: ir para login
+        if (!mounted) return;
+        Navigator.of(
+          context,
+        ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
+        return;
       }
     } catch (e) {
       // fallback: ir para login
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const LoginPage()),
-      );
+      Navigator.of(
+        context,
+      ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
     }
   }
 
@@ -158,141 +262,6 @@ class _SplashPageState extends State<SplashPage> {
             width: 160,
             height: 160,
             fit: BoxFit.contain,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// LoginPage: simples form de nome e telefone
-class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
-
-  @override
-  State<LoginPage> createState() => _LoginPageState();
-}
-
-class _LoginPageState extends State<LoginPage> {
-  final TextEditingController _nomeCtrl = TextEditingController();
-  final TextEditingController _telCtrl = TextEditingController();
-  bool _saving = false;
-  bool _stayLogged = false;
-
-  Future<void> _onEntrar() async {
-    final nome = _nomeCtrl.text.trim();
-    final tel = _telCtrl.text.trim();
-    if (nome.isEmpty || tel.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha nome e telefone')));
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('driver_name', nome);
-      await prefs.setString('driver_phone', tel);
-      await prefs.setBool('stay_logged_in', _stayLogged);
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const RotaMotorista()),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Erro ao salvar dados')));
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    _nomeCtrl.dispose();
-    _telCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.black),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 24),
-              Image.asset('assets/images/preto.png', height: 100),
-              const SizedBox(height: 24),
-              TextField(
-                controller: _nomeCtrl,
-                decoration: const InputDecoration(labelText: 'Nome'),
-                textInputAction: TextInputAction.next,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _telCtrl,
-                decoration: const InputDecoration(labelText: 'Telefone'),
-                keyboardType: TextInputType.phone,
-                textInputAction: TextInputAction.done,
-              ),
-              const SizedBox(height: 8),
-              // Manter-se logado e Sair alinhados à esquerda
-              Row(
-                children: [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Checkbox(
-                            value: _stayLogged,
-                            onChanged: (v) => setState(() => _stayLogged = v ?? false),
-                          ),
-                          const SizedBox(width: 4),
-                          const Text('Manter-se logado'),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF0D47A1),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                onPressed: _saving ? null : _onEntrar,
-                child: _saving
-                    ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Text('Entrar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-              const SizedBox(height: 8),
-              // Linha com botão Sair alinhado à esquerda
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton(
-                  onPressed: () {
-                    // limpar campos
-                    setState(() {
-                      _nomeCtrl.clear();
-                      _telCtrl.clear();
-                      _stayLogged = false;
-                    });
-                  },
-                  child: const Text('Sair'),
-                ),
-              ),
-            ],
           ),
         ),
       ),
@@ -349,9 +318,9 @@ class RotaMotorista extends StatefulWidget {
 }
 
 class RotaMotoristaState extends State<RotaMotorista>
-  with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  final String nomeMotorista = "LEANDRO";
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   String? _avatarPath;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   Future<void> _pickAndSaveAvatar(ImageSource source) async {
     try {
@@ -415,7 +384,6 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  
   String? caminhoFotoSession;
   XFile? fotoEvidencia;
   late AnimationController _buscarController;
@@ -425,16 +393,16 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Avisos do gestor: funções para buscar, marcar e atualizar badge
   Future<List<Map<String, dynamic>>> _buscarAvisos() async {
     try {
-          final res = await Supabase.instance.client
-            .from('avisos_gestor')
-            .select('id,titulo,mensagem,created_at,lida')
-            .eq('lida', false)
-            .order('created_at', ascending: false);
+      final res = await Supabase.instance.client
+          .from('avisos_gestor')
+          .select('id,titulo,mensagem,created_at,lida')
+          .eq('lida', false)
+          .order('created_at', ascending: false);
 
-          final list = res as List<dynamic>? ?? <dynamic>[];
-          return list
-            .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
+      final list = res as List<dynamic>? ?? <dynamic>[];
+      return list
+          .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
     } catch (e) {
       debugPrint('Erro ao buscar avisos: $e');
     }
@@ -443,12 +411,12 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   Future<void> _atualizarAvisosNaoLidas() async {
     try {
-          final res = await Supabase.instance.client
-            .from('avisos_gestor')
-            .select('id')
-            .eq('lida', false);
-          final list = res as List<dynamic>? ?? <dynamic>[];
-          final int count = list.length;
+      final res = await Supabase.instance.client
+          .from('avisos_gestor')
+          .select('id')
+          .eq('lida', false);
+      final list = res as List<dynamic>? ?? <dynamic>[];
+      final int count = list.length;
       if (!mounted) return;
       setState(() {
         mensagensNaoLidas = count;
@@ -509,7 +477,6 @@ class RotaMotoristaState extends State<RotaMotorista>
     'CORREIO',
   ];
 
-  
   // Caminho da foto de falha (usado pelo modal de FALHA)
   String? imagemFalha;
   // Motivo selecionado para falha (guardado no estado para reset/inspeção)
@@ -537,15 +504,18 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {}
     super.initState();
     // Garantir cache limpo e lista inicial vazia (teste: DB reiniciado com id=1)
-    CacheService().saveEntregas(<Map<String, dynamic>>[]).then((_) {
-      if (!mounted) return;
-      setState(() {
-        entregas = [];
-        _lastEntregaId = 0;
-      });
-    }).catchError((e) {
-      debugPrint('Erro limpando cache local antes do run: $e');
-    });
+    CacheService()
+        .saveEntregas(<Map<String, dynamic>>[])
+        .then((_) {
+          if (!mounted) return;
+          setState(() {
+            entregas = [];
+            _lastEntregaId = 0;
+          });
+        })
+        .catchError((e) {
+          debugPrint('Erro limpando cache local antes do run: $e');
+        });
 
     // Chamar carregarDados() primeiro para popular a lista vinda do Supabase
     carregarDados();
@@ -568,13 +538,18 @@ class RotaMotoristaState extends State<RotaMotorista>
     // Registrar polling curto para verificar novos pedidos na tabela `entregas`.
     try {
       _entregasScrollController = ScrollController();
-      _entregasPollingTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      _entregasPollingTimer = Timer.periodic(const Duration(seconds: 3), (
+        _,
+      ) async {
         try {
           // Buscar lista recente (limitada) e comparar tamanho com a lista local
+          final prefsLocal = await SharedPreferences.getInstance();
+          final driverIdPref = prefsLocal.getInt('driver_id') ?? idLogado ?? 0;
+          if (driverIdPref == 0) return;
           final res = await Supabase.instance.client
               .from('entregas')
               .select('*')
-              .eq('motorista_id', '1')
+              .eq('motorista_id', driverIdPref)
               .order('id', ascending: false)
               .limit(50);
           final list = res as List<dynamic>? ?? <dynamic>[];
@@ -589,7 +564,11 @@ class RotaMotoristaState extends State<RotaMotorista>
               'tipo': m['tipo']?.toString() ?? 'entrega',
               'status': m['status']?.toString() ?? '',
               'obs': m['obs']?.toString() ?? '',
-              'observacoes': m['observacoes']?.toString() ?? m['observacao']?.toString() ?? m['obs']?.toString() ?? '',
+              'observacoes':
+                  m['observacoes']?.toString() ??
+                  m['observacao']?.toString() ??
+                  m['obs']?.toString() ??
+                  '',
             };
           }).toList();
 
@@ -608,10 +587,14 @@ class RotaMotoristaState extends State<RotaMotorista>
             } catch (_) {}
             // garantir que o StreamBuilder receba o novo valor imediatamente
             try {
-              if (!_entregasController.isClosed) _entregasController.add(entregas);
+              if (!_entregasController.isClosed) {
+                _entregasController.add(entregas);
+              }
             } catch (_) {}
           } else if (novaLista.length > _totalEntregasAntigo) {
-            debugPrint('CHEGOU NOVO PEDIDO: quantidade anterior=$_totalEntregasAntigo nova=${novaLista.length}');
+            debugPrint(
+              'CHEGOU NOVO PEDIDO: quantidade anterior=$_totalEntregasAntigo nova=${novaLista.length}',
+            );
             try {
               await _tocarSomSucesso();
             } catch (_) {}
@@ -628,18 +611,25 @@ class RotaMotoristaState extends State<RotaMotorista>
             } catch (_) {}
             // garantir que o StreamBuilder receba o novo valor imediatamente
             try {
-              if (!_entregasController.isClosed) _entregasController.add(entregas);
+              if (!_entregasController.isClosed) {
+                _entregasController.add(entregas);
+              }
             } catch (_) {}
             // rolar para o topo para mostrar o novo card
             try {
               if (_entregasScrollController.hasClients) {
-                _entregasScrollController.animateTo(0.0,
-                    duration: Duration(milliseconds: 400), curve: Curves.easeOut);
+                _entregasScrollController.animateTo(
+                  0.0,
+                  duration: Duration(milliseconds: 400),
+                  curve: Curves.easeOut,
+                );
               }
             } catch (_) {}
             // Atualizar _lastEntregaId com o primeiro item, se existir
             final firstId = int.tryParse(novaLista.first['id'] ?? '') ?? 0;
-            if (firstId > 0) _lastEntregaId = firstId;
+            if (firstId > 0) {
+              _lastEntregaId = firstId;
+            }
             // Indicar visualmente que o polling aconteceu e estamos online
             if (!mounted) return;
             setState(() {
@@ -668,7 +658,6 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (e) {
       debugPrint('Erro ao iniciar polling de entregas: $e');
     }
-    
 
     // animação de procura de rotas (opacidade pulsante)
     _buscarController = AnimationController(
@@ -705,6 +694,11 @@ class RotaMotoristaState extends State<RotaMotorista>
       if (av != null && av.isNotEmpty) {
         setState(() => _avatarPath = av);
       }
+      // Carregar nome salvo (garante sincronização imediata da UI após login)
+      final savedName = prefs.getString('driver_name');
+      if (savedName != null && savedName.isNotEmpty) {
+        setState(() => nomeMotorista = savedName);
+      }
     });
 
     // Carregar preferência de esquema de cores (modo_cores). Default = 1
@@ -725,6 +719,20 @@ class RotaMotoristaState extends State<RotaMotorista>
         setState(() => modoOffline = true);
       }
     });
+    // DEBUG: abrir Drawer automaticamente se a flag estiver setada nas prefs
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final open = prefs.getBool('debug_open_drawer') ?? false;
+        if (open) {
+          try {
+            _scaffoldKey.currentState?.openEndDrawer();
+          } catch (_) {}
+          await prefs.remove('debug_open_drawer');
+        }
+      } catch (_) {}
+    });
+    // (debug) flag temporária removida — não setamos mais prefs automaticamente
     // Carregar dados iniciais do Supabase (chamado acima após inicialização)
     // Carregar dados iniciais do Supabase (chamado acima após inicialização)
     // Busca removida: não inicializar listener
@@ -760,7 +768,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {}
     _nomeController.dispose();
     _aptController.dispose();
-    
+
     _reconnectTimer?.cancel();
     _entregasDebounce?.cancel();
     _cacheDebounce?.cancel();
@@ -811,8 +819,6 @@ class RotaMotoristaState extends State<RotaMotorista>
   // TOOLS DE ÁUDIO
   // Única função de modal: `_buildSuccessModal` definida abaixo
 
-  
-
   // Novas funções de áudio conforme especificação
   Future<void> _tocarSomFalha() async {
     try {
@@ -848,8 +854,6 @@ class RotaMotoristaState extends State<RotaMotorista>
       await _audioPlayer.play(AssetSource('audios/final.mp3'));
     } catch (_) {}
   }
-
-
 
   Widget _buildIndicatorCard({
     required IconData icon,
@@ -1369,7 +1373,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       );
                                     }
                                     if (mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
                                         SnackBar(
                                           content: Text(
                                             '❌ Falha ao salvar no banco: ${err.split('\n').first}',
@@ -1608,13 +1614,23 @@ class RotaMotoristaState extends State<RotaMotorista>
       delayFactor: const Duration(seconds: 2),
     );
 
-
     try {
+      // Buscar driver_id atual para filtrar entregas
+      final prefsLocal = await SharedPreferences.getInstance();
+      final driverIdPref = prefsLocal.getInt('driver_id') ?? idLogado ?? 0;
+      if (driverIdPref == 0) {
+        // sem motorista definido, não buscar entregas
+        _setEntregas([]);
+        _atualizarContadores();
+        return;
+      }
+
       // Fazer query ordenando por `id` desc para trazer os pedidos mais recentes primeiro
       dynamic response = await r.retry(() async {
         return await Supabase.instance.client
             .from('entregas')
             .select('*')
+            .eq('motorista_id', driverIdPref)
             .or('status.eq.pendente,status.eq.em_rota')
             .order('id', ascending: false);
       }, retryIf: (e) => e is SocketException || e is TimeoutException);
@@ -1622,7 +1638,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       if (!mounted) return;
 
       final listaRaw = response as List<dynamic>?;
-        if (listaRaw != null) {
+      if (listaRaw != null) {
         final lista = listaRaw.map<Map<String, String>>((e) {
           final m = Map<String, dynamic>.from(e as Map);
           return {
@@ -1844,6 +1860,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: Colors.white,
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(
@@ -1905,7 +1922,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                             child: GestureDetector(
                               onTap: () {},
                               child: AnimatedOpacity(
-                                opacity: _pollingOffline ? 1.0 : (_pollingBlink ? 1.0 : 0.75),
+                                opacity: _pollingOffline
+                                    ? 1.0
+                                    : (_pollingBlink ? 1.0 : 0.75),
                                 duration: const Duration(milliseconds: 180),
                                 child: Transform.scale(
                                   scale: _pollingBlink ? 1.18 : 1.0,
@@ -1913,7 +1932,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     Icons.cloud,
                                     color: _pollingOffline
                                         ? Colors.red
-                                        : (modoDia ? Colors.green : Colors.lightGreenAccent),
+                                        : (modoDia
+                                              ? Colors.green
+                                              : Colors.lightGreenAccent),
                                     size: 22,
                                   ),
                                 ),
@@ -1931,7 +1952,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   showAvisosModal(
                                     context: context,
                                     buscarAvisos: _buscarAvisos,
-                                    atualizarAvisosNaoLidas: _atualizarAvisosNaoLidas,
+                                    atualizarAvisosNaoLidas:
+                                        _atualizarAvisosNaoLidas,
                                     esquemaCores: _esquemaCores,
                                     modoDia: modoDia,
                                   );
@@ -1953,7 +1975,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       minHeight: 16,
                                     ),
                                     child: Text(
-                                      mensagensNaoLidas > 9 ? '9+' : '$mensagensNaoLidas',
+                                      mensagensNaoLidas > 9
+                                          ? '9+'
+                                          : '$mensagensNaoLidas',
                                       style: const TextStyle(
                                         color: Colors.white,
                                         fontSize: 10,
@@ -1997,217 +2021,301 @@ class RotaMotoristaState extends State<RotaMotorista>
           ),
         ),
       ),
-      endDrawer: Drawer(
-        backgroundColor: modoDia ? Colors.grey[100] : Colors.black,
-        child: Column(
-          children: [
-            DrawerHeader(
-              margin: EdgeInsets.zero,
-              padding: EdgeInsets.zero,
-              decoration: BoxDecoration(color: Colors.grey[900]),
-              child: Container(
-                width: double.infinity,
-                padding: EdgeInsets.only(top: 18, bottom: 12),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    GestureDetector(
-                      onTap: () async => _showAvatarPickerOptions(),
-                      child: Container(
-                        width: 72,
-                        height: 72,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                          color: modoDia ? Colors.blue[200] : Colors.blue[700],
-                          image: _avatarPath != null
-                              ? DecorationImage(
-                                  image: FileImage(File(_avatarPath!)),
-                                  fit: BoxFit.cover,
-                                )
-                              : null,
-                        ),
-                        child: _avatarPath == null
-                            ? Icon(
-                                Icons.person,
-                                color: modoDia
-                                    ? Colors.blue[900]
-                                    : Colors.white,
-                              )
-                            : null,
-                      ),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      nomeMotorista,
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            ListTile(
-              leading: Icon(
-                Icons.refresh,
-                color: modoDia ? Colors.black87 : Colors.white70,
-              ),
-              title: Text(
-                'Sincronizar Banco de Dados',
-                style: TextStyle(color: modoDia ? Colors.black : Colors.white),
-              ),
-              onTap: () async {
-                Navigator.pop(context);
-                await carregarDados();
-              },
-            ),
-            SizedBox.shrink(),
-            ListTile(
-              leading: Icon(
-                Icons.wb_sunny,
-                color: modoDia ? Colors.black87 : Colors.white70,
-              ),
-              title: Text(
-                'Modo Dia',
-                style: TextStyle(color: modoDia ? Colors.black : Colors.white),
-              ),
-              trailing: modoDia ? Icon(Icons.check, color: Colors.green) : null,
-              onTap: () {
-                setState(() => modoDia = !modoDia);
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: Icon(
-                Icons.wifi_off,
-                color: modoDia ? Colors.black87 : Colors.white70,
-              ),
-              title: Text(
-                'Modo Offline',
-                style: TextStyle(color: modoDia ? Colors.black : Colors.white),
-              ),
-              trailing: Switch(
-                value: modoOffline,
-                activeThumbColor: Colors.green,
-                onChanged: (val) async {
-                  final navigator = Navigator.of(context);
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setBool('modo_offline', val);
-                  setState(() {
-                    modoOffline = val;
-                  });
-                  // Recarregar dados conforme o novo modo
-                  await carregarDados();
-                  if (!mounted) return;
-                  navigator.pop();
-                },
-              ),
-            ),
-            ListTile(
-              leading: Icon(Icons.palette, color: Colors.red),
-              title: Text(
-                '🎨 Cores dos Cards',
-                style: TextStyle(color: modoDia ? Colors.black : Colors.white),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _abrirModalEsquemasCores(context);
-              },
-            ),
-            ListTile(
-              leading: Icon(
-                Icons.map,
-                color: modoDia ? Colors.green : Colors.blueAccent,
-              ),
-              title: Text(
-                'Configurar GPS',
-                style: TextStyle(color: modoDia ? Colors.black : Colors.white),
-              ),
-              trailing:
-                  (_selectedMapName != null && _selectedMapName!.isNotEmpty)
-                  ? Row(
-                      mainAxisSize: MainAxisSize.min,
+      endDrawer: FutureBuilder<SharedPreferences>(
+        future: SharedPreferences.getInstance(),
+        builder: (ctx, snap) {
+          final prefs = snap.data;
+          final drawerName = nomeMotorista;
+          final drawerAvatar = prefs?.getString('avatar_path') ?? _avatarPath;
+          ImageProvider? avatarProvider;
+          if (drawerAvatar != null && drawerAvatar.isNotEmpty) {
+            try {
+              if (drawerAvatar.startsWith('http')) {
+                avatarProvider = NetworkImage(drawerAvatar);
+              } else {
+                avatarProvider = FileImage(File(drawerAvatar));
+              }
+            } catch (_) {
+              avatarProvider = null;
+            }
+          }
+
+          return Drawer(
+            backgroundColor: modoDia ? Colors.grey[100] : Colors.black,
+            child: Column(
+              children: [
+                DrawerHeader(
+                  margin: EdgeInsets.zero,
+                  padding: EdgeInsets.zero,
+                  decoration: BoxDecoration(color: Colors.grey[900]),
+                  child: Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.only(top: 18, bottom: 12),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Text(
-                          _selectedMapName!.toLowerCase().contains('waze')
-                              ? 'Waze'
-                              : (_selectedMapName!.toLowerCase().contains(
-                                      'google',
-                                    ) ||
-                                    _selectedMapName == 'google_maps')
-                              ? 'Google'
-                              : 'Mapa',
-                          style: TextStyle(
-                            color: modoDia ? Colors.black54 : Colors.white70,
-                            fontSize: 12,
+                        GestureDetector(
+                          onTap: () async => _showAvatarPickerOptions(),
+                          child: Container(
+                            width: 72,
+                            height: 72,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
+                              color: modoDia
+                                  ? Colors.blue[200]
+                                  : Colors.blue[700],
+                              image: avatarProvider != null
+                                  ? DecorationImage(
+                                      image: avatarProvider,
+                                      fit: BoxFit.cover,
+                                    )
+                                  : null,
+                            ),
+                            child: avatarProvider == null
+                                ? Icon(
+                                    Icons.person,
+                                    color: modoDia
+                                        ? Colors.blue[900]
+                                        : Colors.white,
+                                  )
+                                : null,
                           ),
                         ),
-                        SizedBox(width: 6),
-                        Icon(Icons.check, color: Colors.green, size: 18),
-                      ],
-                    )
-                  : null,
-              onTap: () {
-                Navigator.pop(context);
-                _abrirPreferenciasMapa();
-              },
-            ),
-            SafeArea(
-              bottom: true,
-              top: false,
-              child: ListTile(
-                leading: Icon(Icons.exit_to_app, color: Colors.red),
-                title: Text('Sair', style: TextStyle(color: Colors.red)),
-                onTap: () async {
-                  // Fechar o drawer antes de mostrar a confirmação
-                  Navigator.pop(context);
-                  final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
-                  final Color textColor = modoDia ? Colors.black : Colors.white;
-
-                  showDialog(
-                    context: context,
-                    builder: (ctx) {
-                      return AlertDialog(
-                        backgroundColor: bg,
-                        content: Text(
-                          'Deseja realmente sair?',
-                          style: TextStyle(color: textColor),
+                        SizedBox(height: 6),
+                        Text(
+                          drawerName,
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
                         ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(),
-                            child: Text(
-                              'NÃO',
+                      ],
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.refresh,
+                    color: modoDia ? Colors.black87 : Colors.white70,
+                  ),
+                  title: Text(
+                    'Sincronizar Banco de Dados',
+                    style: TextStyle(
+                      color: modoDia ? Colors.black : Colors.white,
+                    ),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await carregarDados();
+                  },
+                ),
+                SizedBox.shrink(),
+                ListTile(
+                  leading: Icon(
+                    Icons.wb_sunny,
+                    color: modoDia ? Colors.black87 : Colors.white70,
+                  ),
+                  title: Text(
+                    'Modo Dia',
+                    style: TextStyle(
+                      color: modoDia ? Colors.black : Colors.white,
+                    ),
+                  ),
+                  trailing: modoDia
+                      ? Icon(Icons.check, color: Colors.green)
+                      : null,
+                  onTap: () {
+                    setState(() => modoDia = !modoDia);
+                    Navigator.pop(context);
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.wifi_off,
+                    color: modoDia ? Colors.black87 : Colors.white70,
+                  ),
+                  title: Text(
+                    'Modo Offline',
+                    style: TextStyle(
+                      color: modoDia ? Colors.black : Colors.white,
+                    ),
+                  ),
+                  trailing: Switch(
+                    value: modoOffline,
+                    activeThumbColor: Colors.green,
+                    onChanged: (val) async {
+                      final navigator = Navigator.of(context);
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('modo_offline', val);
+                      setState(() {
+                        modoOffline = val;
+                      });
+                      // Recarregar dados conforme o novo modo
+                      await carregarDados();
+                      if (!mounted) return;
+                      navigator.pop();
+                    },
+                  ),
+                ),
+                ListTile(
+                  leading: Icon(Icons.palette, color: Colors.red),
+                  title: Text(
+                    '🎨 Cores dos Cards',
+                    style: TextStyle(
+                      color: modoDia ? Colors.black : Colors.white,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _abrirModalEsquemasCores(context);
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.map,
+                    color: modoDia ? Colors.green : Colors.blueAccent,
+                  ),
+                  title: Text(
+                    'Configurar GPS',
+                    style: TextStyle(
+                      color: modoDia ? Colors.black : Colors.white,
+                    ),
+                  ),
+                  trailing:
+                      (_selectedMapName != null && _selectedMapName!.isNotEmpty)
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _selectedMapName!.toLowerCase().contains('waze')
+                                  ? 'Waze'
+                                  : (_selectedMapName!.toLowerCase().contains(
+                                          'google',
+                                        ) ||
+                                        _selectedMapName == 'google_maps')
+                                  ? 'Google'
+                                  : 'Mapa',
+                              style: TextStyle(
+                                color: modoDia
+                                    ? Colors.black54
+                                    : Colors.white70,
+                                fontSize: 12,
+                              ),
+                            ),
+                            SizedBox(width: 6),
+                            Icon(Icons.check, color: Colors.green, size: 18),
+                          ],
+                        )
+                      : null,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _abrirPreferenciasMapa();
+                  },
+                ),
+                SafeArea(
+                  bottom: true,
+                  top: false,
+                  child: ListTile(
+                    leading: Icon(Icons.exit_to_app, color: Colors.red),
+                    title: Text('Sair', style: TextStyle(color: Colors.red)),
+                    onTap: () async {
+                      // Fechar o drawer antes de mostrar a confirmação
+                      Navigator.pop(context);
+                      final Color bg = modoDia
+                          ? Colors.white
+                          : Colors.grey[900]!;
+                      final Color textColor = modoDia
+                          ? Colors.black
+                          : Colors.white;
+
+                      showDialog(
+                        context: context,
+                        builder: (ctx) {
+                          return AlertDialog(
+                            backgroundColor: bg,
+                            content: Text(
+                              'Deseja realmente sair?',
                               style: TextStyle(color: textColor),
                             ),
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              Navigator.of(ctx).pop();
-                              try {
-                                SystemNavigator.pop();
-                              } catch (_) {
-                                // fallback: nothing else to do here
-                              }
-                            },
-                            child: Text(
-                              'SIM',
-                              style: TextStyle(color: Colors.redAccent),
-                            ),
-                          ),
-                        ],
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(ctx).pop(),
+                                child: Text(
+                                  'NÃO',
+                                  style: TextStyle(color: textColor),
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: () async {
+                                  Navigator.of(ctx).pop();
+                                  // Capture NavigatorState before awaiting to avoid using
+                                  // BuildContext across an async gap.
+                                  final nav = Navigator.of(context);
+                                  // limpar estado UI local imediatamente
+                                  if (mounted) {
+                                    setState(() {
+                                      nomeMotorista = '';
+                                      _avatarPath = null;
+                                    });
+                                  }
+                                  try {
+                                    final prefs =
+                                        await SharedPreferences.getInstance();
+                                    // tentar marcar motorista como offline no Supabase antes de limpar prefs
+                                    try {
+                                      final phone =
+                                          prefs.getString('driver_phone') ?? '';
+                                      final tel = phone.replaceAll(
+                                        RegExp(r'\D'),
+                                        '',
+                                      );
+                                      if (tel.isNotEmpty) {
+                                        try {
+                                          final client =
+                                              Supabase.instance.client;
+                                          await client
+                                              .from('motoristas')
+                                              .update({'status': 'offline'})
+                                              .eq('telefone', tel);
+                                        } catch (e) {
+                                          debugPrint(
+                                            'ERRO LOGOUT: falha ao atualizar status offline: $e',
+                                          );
+                                        }
+                                      }
+                                    } catch (_) {}
+                                    await prefs.clear();
+                                    idLogado = null;
+                                  } catch (_) {}
+                                  if (!mounted) return;
+                                  Future.microtask(() {
+                                    nav.pushAndRemoveUntil(
+                                      MaterialPageRoute(
+                                        builder: (_) => const LoginPage(),
+                                      ),
+                                      (route) => false,
+                                    );
+                                  });
+                                },
+                                child: Text(
+                                  'SIM',
+                                  style: TextStyle(color: Colors.redAccent),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       );
                     },
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
       body: Column(
         children: [
