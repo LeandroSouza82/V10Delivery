@@ -54,84 +54,65 @@ class _RegisterPageState extends State<RegisterPage> {
     }
     setState(() => _loading = true);
     try {
-      final res = await Supabase.instance.client.auth.signUp(
-        email: _email.text.trim(),
-        password: _senha.text,
-      );
+      final nome = _nome.text.trim();
+      final sobrenome = _sobrenome.text.trim();
+      final cpf = _cpf.text.trim();
+      final telefone = _telefone.text.trim();
+      final email = _email.text.trim();
+      final senha = _senha.text;
 
-      final user = res.user;
-      if (user == null) throw 'Falha no cadastro';
+      // Inserir diretamente na tabela `motoristas` com acesso = 'pendente'
+      final response = await Supabase.instance.client.from('motoristas').insert({
+        'nome': nome,
+        'sobrenome': sobrenome,
+        'cpf': cpf,
+        'telefone': telefone,
+        'email': email,
+        'senha': senha,
+        'acesso': 'pendente',
+        'created_at': DateTime.now().toIso8601String(),
+      }).select();
 
-      // insert into motoristas (inclui telefone)
-      await Supabase.instance.client.from('motoristas').insert({
-        'nome': _nome.text.trim(),
-        'sobrenome': _sobrenome.text.trim(),
-        'cpf': _cpf.text.trim(),
-        'telefone': _telefone.text.trim(),
-        'email': _email.text.trim(),
-      });
+      // response pode ser List (registro inserido) dependendo da versão
+      final wasInserted = response is List && response.isNotEmpty;
 
-      // Aviso: pedir confirmação por e-mail
-      if (mounted) {
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Quase lá!'),
-            content: const Text(
-              'Verifique seu e-mail para confirmar o cadastro antes de fazer o login.',
+      if (wasInserted) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Cadastro enviado'),
+              content: const Text(
+                'Seu cadastro foi enviado e está aguardando aprovação do gestor. Você será notificado quando aprovado.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('OK'),
-              ),
-              TextButton(
-                onPressed: () async {
-                  Navigator.of(ctx).pop();
-                  // Reenviar e-mail de confirmação — usamos o envio de magic link como forma de reenviar
-                  try {
-                    setState(() => _loading = true);
-                    await Supabase.instance.client.auth.signInWithOtp(
-                      email: emailValue,
-                    );
-                    if (mounted)
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'E-mail de confirmação reenviado. Verifique sua caixa de entrada.',
-                          ),
-                        ),
-                      );
-                  } catch (e) {
-                    if (mounted)
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Erro ao reenviar e-mail: ${e.toString()}',
-                          ),
-                        ),
-                      );
-                  } finally {
-                    if (mounted) setState(() => _loading = false);
-                  }
-                },
-                child: const Text('Reenviar E-mail de Confirmação'),
-              ),
-            ],
-          ),
-        );
-        if (!mounted) return;
+          );
 
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => LoginPage()),
-        );
+          if (!mounted) return;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => LoginPage()),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Falha ao cadastrar. Tente novamente.')),
+          );
+        }
       }
     } catch (e) {
-      if (mounted)
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro: ${e.toString()}')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

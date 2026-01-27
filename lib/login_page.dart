@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'register_page.dart';
-import 'home_page.dart';
+import 'globals.dart';
+import 'main.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -71,49 +72,82 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _loading = true);
     try {
       final email = _emailCtl.text.trim();
-      final pass = _passCtl.text;
-      final res = await Supabase.instance.client.auth.signInWithPassword(
-        email: email,
-        password: pass,
-      );
+      final pass = _passCtl.text.trim();
 
-      final user = res.user;
-      if (user == null) {
-        throw 'Falha ao autenticar. Verifique e-mail/senha. Se você não confirmou o e-mail, confirme antes de tentar novamente.';
+      if (email.isEmpty || pass.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Preencha e-mail e senha')),
+          );
+        }
+        return;
       }
 
-      final userEmail = user.email;
-      if (userEmail == null) {
-        await Supabase.instance.client.auth.signOut();
-        throw 'E-mail do usuário não disponível';
-      }
-
-      // verify motorista exists
+      // Consulta direta na tabela motoristas
       final motorista = await Supabase.instance.client
           .from('motoristas')
           .select()
-          .eq('email', userEmail)
+          .eq('email', email)
+          .eq('senha', pass)
           .maybeSingle();
 
       if (motorista == null) {
-        await Supabase.instance.client.auth.signOut();
-        throw 'E-mail não autorizado na tabela motoristas.';
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Dados incorretos')), 
+          );
+        }
+        return;
       }
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('keep_logged_in', _keep);
+      final Map<String, dynamic> record = Map<String, dynamic>.from(motorista);
+      final acesso = (record['acesso'] ?? '').toString().toLowerCase();
 
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const HomePage()),
-        );
+      if (acesso == 'pendente' || acesso.isEmpty) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Aguardando aprovação'),
+              content: const Text('Aguardando Aprovação do Gestor.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+
+      if (acesso == 'aprovado') {
+        final recId = record['id'] is int
+            ? record['id'] as int
+            : int.tryParse(record['id'].toString()) ?? 0;
+        final nome = (record['nome'] ?? '').toString();
+
+        // salvar prefs e variáveis globais
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('keep_logged_in', _keep);
+        await prefs.setInt('driver_id', recId);
+        await prefs.setString('driver_name', nome);
+        idLogado = recId;
+        nomeMotorista = nome;
+
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const RotaMotorista()),
+          );
+        }
+        return;
       }
     } catch (e) {
-      final msg = e.toString();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg), backgroundColor: Colors.red),
+          SnackBar(content: Text('Erro: ${e.toString()}'), backgroundColor: Colors.red),
         );
       }
     } finally {
