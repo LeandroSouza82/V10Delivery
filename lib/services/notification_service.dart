@@ -84,24 +84,22 @@ class NotificationService {
     }
   }
 
-  /// Salva o token no Supabase na tabela `profiles` ou `usuarios` (fallback para `motoristas`)
+  /// Salva o token no Supabase na tabela `profiles` (direto ao ponto)
   Future<void> saveTokenToSupabase(String token) async {
-    try {
-      if (idLogado == null) {
-        debugPrint('saveTokenToSupabase: nenhum usuário logado (idLogado null)');
-        return;
-      }
-      final client = Supabase.instance.client;
-      final int uid = idLogado!;
-      // Atualizar apenas na tabela `profiles`
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+
+    if (userId != null) {
       try {
-        final res = await client.from('profiles').update({'fcm_token': token}).eq('id', uid);
-        debugPrint('saveTokenToSupabase: profiles update result: $res');
+        await Supabase.instance.client
+            .from('profiles') // Sua tabela correta
+            .update({'fcm_token': token})
+            .eq('id', userId);
+        print('✅ Token salvo com sucesso na tabela profiles!');
       } catch (e) {
-        debugPrint('saveTokenToSupabase: profiles update failed: $e');
+        print('❌ Erro ao salvar na tabela profiles: $e');
       }
-    } catch (e) {
-      debugPrint('Erro em saveTokenToSupabase: $e');
+    } else {
+      print('⚠️ Nenhum usuário logado para salvar o token.');
     }
   }
 }
