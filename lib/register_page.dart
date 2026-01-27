@@ -67,8 +67,8 @@ class _RegisterPageState extends State<RegisterPage> {
       final nome = _nome.text.trim();
       final sobrenome = _sobrenome.text.trim();
       // Salvar apenas dígitos no banco (remover máscara)
-      final cpfRaw = _cpf.text.replaceAll(RegExp(r'[^0-9]'), '');
-      final telefoneRaw = _telefone.text.replaceAll(RegExp(r'[^0-9]'), '');
+      final cpfRaw = _cpf.text.replaceAll(RegExp(r'\D'), '');
+      final telefoneRaw = _telefone.text.replaceAll(RegExp(r'\D'), '');
       final email = _email.text.trim();
       final senha = _senha.text;
 
@@ -191,7 +191,6 @@ class _RegisterPageState extends State<RegisterPage> {
                       border: UnderlineInputBorder(),
                     ),
                     keyboardType: TextInputType.number,
-                    inputFormatters: [_cpfFormatter],
                   ),
                   const SizedBox(height: 16),
                   TextField(
@@ -201,7 +200,6 @@ class _RegisterPageState extends State<RegisterPage> {
                       border: UnderlineInputBorder(),
                     ),
                     keyboardType: TextInputType.phone,
-                    inputFormatters: [_phoneFormatter],
                   ),
                   const SizedBox(height: 16),
                   TextField(
