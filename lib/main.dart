@@ -91,14 +91,14 @@ Future<void> main() async {
             .select('id,nome,avatar_path,telefone')
             .eq('id', userId)
             .limit(1);
-        print('Supabase query (int) raw: $q');
+        debugPrint('Supabase query (int) raw: $q');
         if (q is List) {
           res = q;
         } else if (q is Map && q['data'] != null) {
           res = q['data'] as List<dynamic>;
         }
       } catch (err) {
-        print('Erro Supabase (int try): $err');
+        debugPrint('Erro Supabase (int try): $err');
       }
 
       // Se vazio, tente como string (UUID)
@@ -109,18 +109,18 @@ Future<void> main() async {
               .select('*')
               .eq('id', userId.toString())
               .limit(1);
-          print('Supabase query (string) raw: $q2');
+          debugPrint('Supabase query (string) raw: $q2');
           if (q2 is List) {
             res = q2;
           } else if (q2 is Map && q2['data'] != null) {
             res = q2['data'] as List<dynamic>;
           }
         } catch (err2) {
-          print('Erro Supabase (string try): $err2');
+          debugPrint('Erro Supabase (string try): $err2');
         }
       }
 
-      print('Resultado da Query: $res');
+      debugPrint('Resultado da Query: $res');
 
       if (res.isNotEmpty) {
         final record = res.first as Map<String, dynamic>;
@@ -152,7 +152,7 @@ Future<void> main() async {
         nomeMotorista = 'Motorista #$userId';
       }
     } catch (e) {
-      print('Erro Supabase: $e');
+      debugPrint('Erro Supabase: $e');
       // Falha na consulta: fallback local
       await prefs.setInt('driver_id', userId);
       await prefs.setString('driver_name', 'Motorista #$userId');
@@ -414,7 +414,6 @@ class RotaMotorista extends StatefulWidget {
 class RotaMotoristaState extends State<RotaMotorista>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   String? _avatarPath;
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   Future<void> _pickAndSaveAvatar(ImageSource source) async {
     try {
@@ -820,7 +819,9 @@ class RotaMotoristaState extends State<RotaMotorista>
         final open = prefs.getBool('debug_open_drawer') ?? false;
         if (open) {
           try {
-            _scaffoldKey.currentState?.openEndDrawer();
+            if (!mounted) return;
+            // ignore: use_build_context_synchronously
+            Scaffold.of(context).openEndDrawer();
           } catch (_) {}
           await prefs.remove('debug_open_drawer');
         }
@@ -1954,7 +1955,6 @@ class RotaMotoristaState extends State<RotaMotorista>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      key: _scaffoldKey,
       backgroundColor: Colors.white,
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(
@@ -2550,7 +2550,6 @@ class RotaMotoristaState extends State<RotaMotorista>
     final Color textSecondary = Colors.black87;
 
     return Container(
-      key: ValueKey(item["id"]),
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
         color: fillColor,

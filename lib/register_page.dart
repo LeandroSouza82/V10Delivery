@@ -62,19 +62,30 @@ class _RegisterPageState extends State<RegisterPage> {
       final senha = _senha.text;
 
       // Inserir diretamente na tabela `motoristas` com acesso = 'pendente'
-      final response = await Supabase.instance.client.from('motoristas').insert({
-        'nome': nome,
-        'sobrenome': sobrenome,
-        'cpf': cpf,
-        'telefone': telefone,
-        'email': email,
-        'senha': senha,
-        'acesso': 'pendente',
-        'created_at': DateTime.now().toIso8601String(),
-      }).select();
+      final response =
+          await Supabase.instance.client.from('motoristas').insert({
+            'nome': nome,
+            'sobrenome': sobrenome,
+            'cpf': cpf,
+            'telefone': telefone,
+            'email': email,
+            'senha': senha,
+            'acesso': 'pendente',
+          }).select();
 
-      // response pode ser List (registro inserido) dependendo da versão
-      final wasInserted = response is List && response.isNotEmpty;
+      // Determinar se houve inserção sem depender de checagens de tipo explícitas
+      bool wasInserted = false;
+      try {
+        final listResp = response as List<dynamic>;
+        wasInserted = listResp.isNotEmpty;
+      } catch (_) {
+        try {
+          final mapResp = response as Map<String, dynamic>;
+          wasInserted = mapResp.isNotEmpty;
+        } catch (_) {
+          wasInserted = false;
+        }
+      }
 
       if (wasInserted) {
         if (mounted) {
@@ -103,15 +114,17 @@ class _RegisterPageState extends State<RegisterPage> {
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Falha ao cadastrar. Tente novamente.')),
+            const SnackBar(
+              content: Text('Falha ao cadastrar. Tente novamente.'),
+            ),
           );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro: ${e.toString()}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro: ${e.toString()}')));
       }
     } finally {
       if (mounted) setState(() => _loading = false);
