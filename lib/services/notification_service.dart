@@ -10,7 +10,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     if (Firebase.apps.isEmpty) await Firebase.initializeApp();
   } catch (_) {}
-  // Optionally handle data-only messages here.
   if (kDebugMode) {
     debugPrint('FCM BG message: ${message.messageId}');
   }
@@ -23,7 +22,8 @@ class NotificationService {
 
   static const MethodChannel _channel = MethodChannel('app.channel.launcher');
 
-  Future<void> init(GlobalKey<NavigatorState>? navigatorKey) async {
+  /// Inicializa Firebase Messaging, registra handlers, cria canal 'pedidos'
+  Future<void> initialize() async {
     // Ensure Firebase initialized
     try {
       if (Firebase.apps.isEmpty) await Firebase.initializeApp();
@@ -34,49 +34,37 @@ class NotificationService {
       FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
     } catch (_) {}
 
-    // Create native channel 'pedidos' with sound 'buzina'
+    // Create native channel 'pedidos' with sound 'buzina' (no extension)
     try {
       await _channel.invokeMethod('createPedidosChannel', {'sound': 'buzina'});
     } catch (_) {}
 
-    // Request permissions (iOS/Android 13)
+    // Request notification permissions
     try {
       await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
     } catch (_) {}
 
-    // Setup foreground message handler
+    // Foreground messages: just log for now
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (kDebugMode) debugPrint('FCM onMessage: ${message.messageId} ${message.notification?.title}');
-      if (navigatorKey != null) {
-        final ctx = navigatorKey.currentState?.overlay?.context ?? navigatorKey.currentContext;
-        if (ctx != null) {
-          final messenger = ScaffoldMessenger.maybeOf(ctx);
-          if (messenger != null) {
-            messenger.showSnackBar(SnackBar(
-              content: Text(message.notification?.body ?? 'Nova notificação'),
-              duration: const Duration(seconds: 4),
-            ));
-          }
-        }
-      }
     });
 
-    // Log and persist token when available
-    await logFcmToken();
+    // Print token on app start
+    await printFcmToken();
 
-    // Listen for token refreshes
+    // Listen for token refreshes and log
     FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
       debugPrint('FCM Token refreshed: $newToken');
-      // Optionally persist or send to server here
     });
   }
 
-  Future<void> logFcmToken() async {
+  /// Obtém e mostra o token FCM no log
+  Future<void> printFcmToken() async {
     try {
       final token = await FirebaseMessaging.instance.getToken();
-      debugPrint('--- NOTIFICATION SERVICE TOKEN ---');
+      debugPrint('--- FCM TOKEN (NotificationService) ---');
       debugPrint(token ?? 'Token não disponível');
-      debugPrint('----------------------------------');
+      debugPrint('---------------------------------------');
     } catch (e) {
       debugPrint('Erro ao obter token FCM: $e');
     }

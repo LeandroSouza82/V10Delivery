@@ -88,9 +88,9 @@ Future<void> main() async {
   // Inicializa o gerenciador do overlay (observa ciclo de vida)
   OverlayManager().init();
 
-  // Inicializar canais de notificação nativos (som: buzina)
+  // Inicializar NotificationService (Firebase Messaging centralizado)
   try {
-    await NotificationService().init(navigatorKey);
+    await NotificationService().initialize();
   } catch (_) {}
 
   // Para teste: buscar dados do motorista com `id = 1` no Supabase
