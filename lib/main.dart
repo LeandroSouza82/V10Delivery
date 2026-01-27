@@ -20,13 +20,6 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
-@pragma('vm:entry-point')
-Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // Background handler deve ser top-level e isolado: inicializa Firebase
-  try {
-    await Firebase.initializeApp();
-  } catch (_) {}
-}
 
 import 'services/cache_service.dart';
 import 'widgets/avisos_modal.dart';
@@ -92,31 +85,13 @@ Future<void> main() async {
   // Inicializa Firebase para receber notificações
   await Firebase.initializeApp();
 
-  // Registrar handler de background top-level
-  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-
   // Inicializa o gerenciador do overlay (observa ciclo de vida)
   OverlayManager().init();
 
   // Inicializar canais de notificação nativos (som: buzina)
   try {
-    await NotificationService().init();
+    await NotificationService().init(navigatorKey);
   } catch (_) {}
-
-  // Listener para mensagens em foreground
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    debugPrint('FCM onMessage: ${message.messageId} ${message.notification?.title} ${message.notification?.body}');
-    final ctx = navigatorKey.currentState?.overlay?.context ?? navigatorKey.currentContext;
-    if (ctx != null) {
-      final messenger = ScaffoldMessenger.maybeOf(ctx);
-      if (messenger != null) {
-        messenger.showSnackBar(SnackBar(
-          content: Text(message.notification?.body ?? 'Nova notificação'),
-          duration: const Duration(seconds: 4),
-        ));
-      }
-    }
-  });
 
   // Para teste: buscar dados do motorista com `id = 1` no Supabase
   // e popular as prefs. Em falha, usar valores de fallback.
