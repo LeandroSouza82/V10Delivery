@@ -20,8 +20,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'services/cache_service.dart';
 import 'widgets/avisos_modal.dart';
-import 'package:v10_delivery/auth_pages.dart';
+// import 'package:v10_delivery/auth_pages.dart'; // removido: arquivo não existe no workspace
 import 'globals.dart';
+import 'login_page.dart';
 
 // Número do gestor (formato internacional sem +). Configure aqui.
 const String numeroGestor = '5548996525008';
@@ -73,6 +74,18 @@ Future<void> main() async {
   // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
 
+  // Mock temporário para testes locais: força um motorista logado e prefs.
+  // Forçar `userId` constante conforme solicitado.
+  const String userId = '1';
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('keep_logged_in', true);
+    await prefs.setInt('driver_id', int.parse(userId));
+    await prefs.setString('driver_name', 'Motorista Teste');
+    idLogado = int.parse(userId);
+    nomeMotorista = 'Motorista Teste';
+  } catch (_) {}
+
   runApp(const MyApp());
 }
 
@@ -83,9 +96,15 @@ class V10DeliveryApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.light(),
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: Colors.white,
+      ),
       themeMode: ThemeMode.light,
-      home: SplashPage(),
+      // Temporariamente direciona o `home` para a tela principal interna
+      // para testes rápidos das telas internas sem passar pelo login.
+      home: const RotaMotorista(),
     );
   }
 }
@@ -227,14 +246,14 @@ class _SplashPageState extends State<SplashPage> {
         if (!mounted) return;
         Navigator.of(
           context,
-        ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
+        ).pushReplacement(MaterialPageRoute(builder: (_) => LoginPage()));
         return;
       } else {
         // Sem telefone salvo: ir para login
         if (!mounted) return;
         Navigator.of(
           context,
-        ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
+        ).pushReplacement(MaterialPageRoute(builder: (_) => LoginPage()));
         return;
       }
     } catch (e) {
@@ -242,7 +261,7 @@ class _SplashPageState extends State<SplashPage> {
       if (!mounted) return;
       Navigator.of(
         context,
-      ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
+      ).pushReplacement(MaterialPageRoute(builder: (_) => LoginPage()));
     }
   }
 
@@ -2294,7 +2313,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   Future.microtask(() {
                                     nav.pushAndRemoveUntil(
                                       MaterialPageRoute(
-                                        builder: (_) => const LoginPage(),
+                                        builder: (_) => LoginPage(),
                                       ),
                                       (route) => false,
                                     );
