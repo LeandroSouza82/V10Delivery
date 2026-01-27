@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../globals.dart';
 
 // Background handler must be a top-level or static function with pragma
 @pragma('vm:entry-point')
@@ -49,12 +52,23 @@ class NotificationService {
       if (kDebugMode) debugPrint('FCM onMessage: ${message.messageId} ${message.notification?.title}');
     });
 
-    // Print token on app start
-    await printFcmToken();
+    // Print token on app start and save to Supabase if possible
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null && token.isNotEmpty) {
+        await printFcmToken();
+        await saveTokenToSupabase(token);
+      }
+    } catch (e) {
+      debugPrint('Erro obtendo token inicial: $e');
+    }
 
-    // Listen for token refreshes and log
-    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+    // Listen for token refreshes and save to Supabase
+    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
       debugPrint('FCM Token refreshed: $newToken');
+      if (newToken != null && newToken.isNotEmpty) {
+        await saveTokenToSupabase(newToken);
+      }
     });
   }
 
@@ -67,6 +81,47 @@ class NotificationService {
       debugPrint('---------------------------------------');
     } catch (e) {
       debugPrint('Erro ao obter token FCM: $e');
+    }
+  }
+
+  /// Salva o token no Supabase na tabela `profiles` ou `usuarios` (fallback para `motoristas`)
+  Future<void> saveTokenToSupabase(String token) async {
+    try {
+      if (idLogado == null) {
+        debugPrint('saveTokenToSupabase: nenhum usuário logado (idLogado null)');
+        return;
+      }
+      final client = Supabase.instance.client;
+      final int uid = idLogado!;
+
+      // Try profiles
+      try {
+        final res = await client.from('profiles').update({'fcm_token': token}).eq('id', uid);
+        debugPrint('saveTokenToSupabase: profiles update result: $res');
+        return;
+      } catch (e) {
+        debugPrint('saveTokenToSupabase: profiles update failed: $e');
+      }
+
+      // Try usuarios
+      try {
+        final res = await client.from('usuarios').update({'fcm_token': token}).eq('id', uid);
+        debugPrint('saveTokenToSupabase: usuarios update result: $res');
+        return;
+      } catch (e) {
+        debugPrint('saveTokenToSupabase: usuarios update failed: $e');
+      }
+
+      // Fallback: motoristas
+      try {
+        final res = await client.from('motoristas').update({'fcm_token': token}).eq('id', uid);
+        debugPrint('saveTokenToSupabase: motoristas update result: $res');
+        return;
+      } catch (e) {
+        debugPrint('saveTokenToSupabase: motoristas update failed: $e');
+      }
+    } catch (e) {
+      debugPrint('Erro em saveTokenToSupabase: $e');
     }
   }
 }
