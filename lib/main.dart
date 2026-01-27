@@ -74,16 +74,91 @@ Future<void> main() async {
   // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
 
-  // Mock temporário para testes locais: força um motorista logado e prefs.
-  // Forçar `userId` constante conforme solicitado.
-  const String userId = '1';
+  // Para teste: buscar dados do motorista com `id = 1` no Supabase
+  // e popular as prefs. Em falha, usar valores de fallback.
+  const int userId = 1;
   try {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('keep_logged_in', true);
-    await prefs.setInt('driver_id', int.parse(userId));
-    await prefs.setString('driver_name', 'Motorista Teste');
-    idLogado = int.parse(userId);
-    nomeMotorista = 'Motorista Teste';
+    try {
+      final client = Supabase.instance.client;
+
+      // Primeiro, tente buscar assumindo que `id` é inteiro
+      List<dynamic> res = [];
+      try {
+        final dynamic q = await client
+            .from('motoristas')
+            .select('id,nome,avatar_path,telefone')
+            .eq('id', userId)
+            .limit(1);
+        print('Supabase query (int) raw: $q');
+        if (q is List) {
+          res = q;
+        } else if (q is Map && q['data'] != null) {
+          res = q['data'] as List<dynamic>;
+        }
+      } catch (err) {
+        print('Erro Supabase (int try): $err');
+      }
+
+      // Se vazio, tente como string (UUID)
+      if (res.isEmpty) {
+        try {
+          final dynamic q2 = await client
+              .from('motoristas')
+              .select('*')
+              .eq('id', userId.toString())
+              .limit(1);
+          print('Supabase query (string) raw: $q2');
+          if (q2 is List) {
+            res = q2;
+          } else if (q2 is Map && q2['data'] != null) {
+            res = q2['data'] as List<dynamic>;
+          }
+        } catch (err2) {
+          print('Erro Supabase (string try): $err2');
+        }
+      }
+
+      print('Resultado da Query: $res');
+
+      if (res.isNotEmpty) {
+        final record = res.first as Map<String, dynamic>;
+        final dbName = (record['nome'] ?? '').toString();
+        final dbAvatar = (record['avatar_path'] ?? '').toString();
+        final recId = record['id'] is int
+            ? record['id'] as int
+            : int.tryParse(record['id'].toString()) ?? userId;
+
+        await prefs.setInt('driver_id', recId);
+        idLogado = recId;
+
+        if (dbName.isNotEmpty) {
+          await prefs.setString('driver_name', dbName);
+          nomeMotorista = dbName;
+        } else {
+          await prefs.setString('driver_name', 'Motorista #$userId');
+          nomeMotorista = 'Motorista #$userId';
+        }
+
+        if (dbAvatar.isNotEmpty) {
+          await prefs.setString('avatar_path', dbAvatar);
+        }
+      } else {
+        // Nenhum registro: usar fallback
+        await prefs.setInt('driver_id', userId);
+        await prefs.setString('driver_name', 'Motorista #$userId');
+        idLogado = userId;
+        nomeMotorista = 'Motorista #$userId';
+      }
+    } catch (e) {
+      print('Erro Supabase: $e');
+      // Falha na consulta: fallback local
+      await prefs.setInt('driver_id', userId);
+      await prefs.setString('driver_name', 'Motorista #$userId');
+      idLogado = userId;
+      nomeMotorista = 'Motorista #$userId';
+    }
   } catch (_) {}
 
   runApp(const MyApp());
