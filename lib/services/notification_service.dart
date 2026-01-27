@@ -93,32 +93,12 @@ class NotificationService {
       }
       final client = Supabase.instance.client;
       final int uid = idLogado!;
-
-      // Try profiles
+      // Atualizar apenas na tabela `profiles`
       try {
         final res = await client.from('profiles').update({'fcm_token': token}).eq('id', uid);
         debugPrint('saveTokenToSupabase: profiles update result: $res');
-        return;
       } catch (e) {
         debugPrint('saveTokenToSupabase: profiles update failed: $e');
-      }
-
-      // Try usuarios
-      try {
-        final res = await client.from('usuarios').update({'fcm_token': token}).eq('id', uid);
-        debugPrint('saveTokenToSupabase: usuarios update result: $res');
-        return;
-      } catch (e) {
-        debugPrint('saveTokenToSupabase: usuarios update failed: $e');
-      }
-
-      // Fallback: motoristas
-      try {
-        final res = await client.from('motoristas').update({'fcm_token': token}).eq('id', uid);
-        debugPrint('saveTokenToSupabase: motoristas update result: $res');
-        return;
-      } catch (e) {
-        debugPrint('saveTokenToSupabase: motoristas update failed: $e');
       }
     } catch (e) {
       debugPrint('Erro em saveTokenToSupabase: $e');
