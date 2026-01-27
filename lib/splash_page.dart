@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+// supabase import not used here; splash uses prefs only
 import 'home_page.dart';
 import 'login_page.dart';
 
@@ -25,10 +25,10 @@ class _SplashPageState extends State<SplashPage> {
     await Future.delayed(const Duration(milliseconds: 2500));
 
     final prefs = await SharedPreferences.getInstance();
-    final keep = prefs.getBool('keep_logged_in') ?? false;
-    final session = Supabase.instance.client.auth.currentSession;
+    final manter = prefs.getBool('manter_logado') ?? false;
+    final savedId = prefs.getInt('driver_id') ?? 0;
 
-    if (keep && session != null) {
+    if (manter && savedId > 0) {
       if (mounted) {
         Navigator.pushReplacement(
           context,
@@ -50,10 +50,65 @@ class _SplashPageState extends State<SplashPage> {
     return Scaffold(
       backgroundColor: Colors.white,
       body: Center(
-        child: Image.asset(
-          'assets/images/branco.jpg',
-          fit: BoxFit.contain,
-          width: 220,
+        child: Column(
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            // Espaço expansível que centraliza o bloco do logo
+            Expanded(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0.0, end: 1.0),
+                      duration: const Duration(milliseconds: 1200),
+                      curve: Curves.easeInOutCubic,
+                      builder: (context, value, child) {
+                        final scale = 0.7 + (0.3 * value);
+                        return Opacity(
+                          opacity: value,
+                          child: Transform.scale(
+                            scale: scale,
+                            child: SizedBox(
+                              width: MediaQuery.of(context).size.width * 0.75,
+                              child: Image.asset(
+                                'assets/images/branco.jpg',
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 30),
+                    const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF6750A4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Rodapé fixo
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16.0),
+              child: Text(
+                'Logística Inteligente',
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.w300,
+                  letterSpacing: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
         ),
       ),
     );

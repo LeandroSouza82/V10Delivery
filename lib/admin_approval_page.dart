@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'login_page.dart';
+import 'splash_page.dart';
 import 'globals.dart';
 
 class AdminApprovalPage extends StatefulWidget {
@@ -75,13 +75,19 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
               final navigator = Navigator.of(context);
               try {
                 final prefs = await SharedPreferences.getInstance();
-                await prefs.clear();
+                try {
+                  await prefs.setBool('manter_logado', false);
+                } catch (_) {}
+                try {
+                  await prefs.remove('driver_id');
+                  await prefs.remove('driver_name');
+                } catch (_) {}
                 idLogado = null;
                 nomeMotorista = '';
               } catch (_) {}
               if (!mounted) return;
               navigator.pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const LoginPage()),
+                MaterialPageRoute(builder: (_) => const SplashPage()),
                 (route) => false,
               );
             },

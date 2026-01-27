@@ -79,7 +79,6 @@ Future<void> main() async {
   const int userId = 1;
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('keep_logged_in', true);
     try {
       final client = Supabase.instance.client;
 
@@ -177,9 +176,8 @@ class V10DeliveryApp extends StatelessWidget {
         scaffoldBackgroundColor: Colors.white,
       ),
       themeMode: ThemeMode.light,
-      // Temporariamente direciona o `home` para a tela principal interna
-      // para testes rápidos das telas internas sem passar pelo login.
-      home: const RotaMotorista(),
+      // Inicializa a partir da Splash para respeitar "Manter logado"
+      home: const SplashPage(),
     );
   }
 }
@@ -235,7 +233,18 @@ class _SplashPageState extends State<SplashPage> {
 
       if (!mounted) return;
 
-      // Se há telefone salvo, sempre tentar checar o status no Supabase.
+      // Respeitar a preferência de 'manter_logado' do usuário
+      final keep = prefs.getBool('manter_logado') ?? false;
+      final savedId = prefs.getInt('driver_id') ?? 0;
+      if (keep && savedId > 0) {
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const RotaMotorista()),
+        );
+        return;
+      }
+
+      // Se há telefone salvo, tentar checar o status no Supabase.
       if (telefone != null && telefone.isNotEmpty) {
         // Verificar no Supabase se o acesso ainda é aprovado
         try {
@@ -315,7 +324,16 @@ class _SplashPageState extends State<SplashPage> {
         }
         // Se não aprovado ou erro, limpar prefs e ir para login
         try {
-          await prefs.clear();
+          try {
+            try {
+              await prefs.setBool('manter_logado', false);
+            } catch (_) {}
+          } catch (_) {}
+          try {
+            await prefs.remove('driver_id');
+            await prefs.remove('driver_name');
+            await prefs.remove('avatar_path');
+          } catch (_) {}
           idLogado = null;
         } catch (_) {}
         if (!mounted) return;
@@ -343,20 +361,64 @@ class _SplashPageState extends State<SplashPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D47A1),
+      backgroundColor: Colors.white,
       body: Center(
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Image.asset(
-            'assets/images/preto.png',
-            width: 160,
-            height: 160,
-            fit: BoxFit.contain,
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            Expanded(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0.0, end: 1.0),
+                      duration: const Duration(milliseconds: 1200),
+                      curve: Curves.easeInOutCubic,
+                      builder: (context, value, child) {
+                        final scale = 0.7 + (0.3 * value);
+                        return Opacity(
+                          opacity: value,
+                          child: Transform.scale(
+                            scale: scale,
+                            child: SizedBox(
+                              width: MediaQuery.of(context).size.width * 0.75,
+                              child: Image.asset(
+                                'assets/images/branco.jpg',
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 30),
+                    const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF6750A4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16.0),
+              child: Text(
+                'Logística Inteligente',
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.w300,
+                  letterSpacing: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2136,49 +2198,57 @@ class RotaMotoristaState extends State<RotaMotorista>
 
           return Drawer(
             backgroundColor: modoDia ? Colors.grey[100] : Colors.black,
-            child: Column(
+            child: ListView(
+              padding: EdgeInsets.zero,
               children: [
-                DrawerHeader(
-                  margin: EdgeInsets.zero,
-                  padding: EdgeInsets.zero,
+                // Flexible header: safe top spacing via MediaQuery, minimal height
+                Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    MediaQuery.of(context).padding.top + 12,
+                    16,
+                    12,
+                  ),
                   decoration: BoxDecoration(color: Colors.grey[900]),
-                  child: Container(
-                    width: double.infinity,
-                    padding: EdgeInsets.only(top: 18, bottom: 12),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        GestureDetector(
-                          onTap: () async => _showAvatarPickerOptions(),
-                          child: Container(
-                            width: 72,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 2),
-                              color: modoDia
-                                  ? Colors.blue[200]
-                                  : Colors.blue[700],
-                              image: avatarProvider != null
-                                  ? DecorationImage(
-                                      image: avatarProvider,
-                                      fit: BoxFit.cover,
-                                    )
-                                  : null,
-                            ),
-                            child: avatarProvider == null
-                                ? Icon(
-                                    Icons.person,
-                                    color: modoDia
-                                        ? Colors.blue[900]
-                                        : Colors.white,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      GestureDetector(
+                        onTap: () async => _showAvatarPickerOptions(),
+                        child: Container(
+                          margin: const EdgeInsets.only(top: 4),
+                          width: 72,
+                          height: 72,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                            color: modoDia
+                                ? Colors.blue[200]
+                                : Colors.blue[700],
+                            image: avatarProvider != null
+                                ? DecorationImage(
+                                    image: avatarProvider,
+                                    fit: BoxFit.cover,
                                   )
                                 : null,
                           ),
+                          child: avatarProvider == null
+                              ? Icon(
+                                  Icons.person,
+                                  color: modoDia
+                                      ? Colors.blue[900]
+                                      : Colors.white,
+                                )
+                              : null,
                         ),
-                        SizedBox(height: 6),
-                        Text(
+                      ),
+                      const SizedBox(height: 6),
+                      // Use FittedBox so long names scale down instead of overflowing
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
                           drawerName,
                           style: TextStyle(
                             fontSize: 20,
@@ -2186,8 +2256,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                             color: Colors.white,
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
                 ListTile(
@@ -2381,14 +2451,27 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         }
                                       }
                                     } catch (_) {}
-                                    await prefs.clear();
+                                    // apenas desmarcar 'manter_logado' e remover dados de sessão
+                                    try {
+                                      await prefs.setBool(
+                                        'manter_logado',
+                                        false,
+                                      );
+                                    } catch (_) {}
+                                    try {
+                                      await prefs.remove('driver_id');
+                                      await prefs.remove('driver_name');
+                                      await prefs.remove('avatar_path');
+                                    } catch (_) {}
+                                    // NÃO remover email_salvo — usuário pediu para preservar
                                     idLogado = null;
+                                    nomeMotorista = '';
                                   } catch (_) {}
                                   if (!mounted) return;
                                   Future.microtask(() {
                                     nav.pushAndRemoveUntil(
                                       MaterialPageRoute(
-                                        builder: (_) => LoginPage(),
+                                        builder: (_) => const SplashPage(),
                                       ),
                                       (route) => false,
                                     );

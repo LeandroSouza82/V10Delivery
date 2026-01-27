@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mask_text_input_formatter/mask_text_input_formatter.dart';
 import 'login_page.dart';
 
 class RegisterPage extends StatefulWidget {
@@ -14,6 +16,14 @@ class _RegisterPageState extends State<RegisterPage> {
   final _sobrenome = TextEditingController();
   final _cpf = TextEditingController();
   final _telefone = TextEditingController();
+  final _cpfFormatter = MaskTextInputFormatter(
+    mask: '###.###.###-##',
+    filter: {"#": RegExp(r'\d')},
+  );
+  final _phoneFormatter = MaskTextInputFormatter(
+    mask: '(##) #####-####',
+    filter: {"#": RegExp(r'\d')},
+  );
   final _email = TextEditingController();
   final _senha = TextEditingController();
   final _senha2 = TextEditingController();
@@ -56,8 +66,9 @@ class _RegisterPageState extends State<RegisterPage> {
     try {
       final nome = _nome.text.trim();
       final sobrenome = _sobrenome.text.trim();
-      final cpf = _cpf.text.trim();
-      final telefone = _telefone.text.trim();
+      // Salvar apenas dígitos no banco (remover máscara)
+      final cpfRaw = _cpf.text.replaceAll(RegExp(r'[^0-9]'), '');
+      final telefoneRaw = _telefone.text.replaceAll(RegExp(r'[^0-9]'), '');
       final email = _email.text.trim();
       final senha = _senha.text;
 
@@ -66,8 +77,8 @@ class _RegisterPageState extends State<RegisterPage> {
           await Supabase.instance.client.from('motoristas').insert({
             'nome': nome,
             'sobrenome': sobrenome,
-            'cpf': cpf,
-            'telefone': telefone,
+            'cpf': cpfRaw,
+            'telefone': telefoneRaw,
             'email': email,
             'senha': senha,
             'acesso': 'pendente',
@@ -133,73 +144,132 @@ class _RegisterPageState extends State<RegisterPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     return Scaffold(
       appBar: AppBar(title: const Text('Registrar')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      body: SafeArea(
         child: SingleChildScrollView(
-          child: Column(
-            children: [
-              TextField(
-                controller: _nome,
-                decoration: const InputDecoration(labelText: 'Nome'),
-              ),
-              TextField(
-                controller: _sobrenome,
-                decoration: const InputDecoration(labelText: 'Sobrenome'),
-              ),
-              TextField(
-                controller: _cpf,
-                decoration: const InputDecoration(labelText: 'CPF'),
-              ),
-              TextField(
-                controller: _telefone,
-                decoration: const InputDecoration(labelText: 'Telefone'),
-              ),
-              Image.asset(
-                'assets/images/branco.jpg',
-                height: 140,
-                fit: BoxFit.contain,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _email,
-                decoration: const InputDecoration(labelText: 'E-mail'),
-              ),
-              TextField(
-                controller: _senha,
-                obscureText: _obscure,
-                decoration: InputDecoration(
-                  labelText: 'Senha',
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscure ? Icons.visibility_off : Icons.visibility,
+          padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + bottomInset),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 8),
+                  // Moto icon, centralizado, menor que no login
+                  const Center(
+                    child: Icon(
+                      Icons.delivery_dining,
+                      size: 60,
+                      color: Colors.purple,
                     ),
-                    onPressed: () => setState(() => _obscure = !_obscure),
                   ),
-                ),
-              ),
-              TextField(
-                controller: _senha2,
-                obscureText: _obscure2,
-                decoration: InputDecoration(
-                  labelText: 'Confirmar senha',
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscure2 ? Icons.visibility_off : Icons.visibility,
+                  const SizedBox(height: 20),
+
+                  // Campos ordenados e espaçados
+                  TextField(
+                    controller: _nome,
+                    decoration: const InputDecoration(
+                      labelText: 'Nome',
+                      border: UnderlineInputBorder(),
                     ),
-                    onPressed: () => setState(() => _obscure2 = !_obscure2),
                   ),
-                ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _sobrenome,
+                    decoration: const InputDecoration(
+                      labelText: 'Sobrenome',
+                      border: UnderlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _cpf,
+                    decoration: const InputDecoration(
+                      labelText: 'CPF',
+                      border: UnderlineInputBorder(),
+                    ),
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [_cpfFormatter],
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _telefone,
+                    decoration: const InputDecoration(
+                      labelText: 'Telefone',
+                      border: UnderlineInputBorder(),
+                    ),
+                    keyboardType: TextInputType.phone,
+                    inputFormatters: [_phoneFormatter],
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _email,
+                    decoration: const InputDecoration(
+                      labelText: 'E-mail',
+                      border: UnderlineInputBorder(),
+                    ),
+                    keyboardType: TextInputType.emailAddress,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _senha,
+                    obscureText: _obscure,
+                    decoration: InputDecoration(
+                      labelText: 'Senha',
+                      border: const UnderlineInputBorder(),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscure ? Icons.visibility_off : Icons.visibility,
+                        ),
+                        onPressed: () => setState(() => _obscure = !_obscure),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _senha2,
+                    obscureText: _obscure2,
+                    decoration: InputDecoration(
+                      labelText: 'Confirmar Senha',
+                      border: const UnderlineInputBorder(),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscure2 ? Icons.visibility_off : Icons.visibility,
+                        ),
+                        onPressed: () => setState(() => _obscure2 = !_obscure2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: _loading ? null : _register,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.purple,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 14,
+                        horizontal: 20,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: _loading
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Registrar'),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                onPressed: _loading ? null : _register,
-                child: _loading
-                    ? const CircularProgressIndicator()
-                    : const Text('Registrar'),
-              ),
-            ],
+            ),
           ),
         ),
       ),

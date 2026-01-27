@@ -25,6 +25,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
   bool _keep = false;
   bool _obscure = true;
+  bool _rememberEmail = false;
   // visibilidade para campos do modal
   bool _obscureNova = true;
   bool _obscureConfirma = true;
@@ -103,7 +104,14 @@ class _LoginPageState extends State<LoginPage> {
 
         // salvar prefs e variáveis globais
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('keep_logged_in', _keep);
+        // Persistir a escolha do usuário de manter logado (aguardar a conclusão)
+        await prefs.setBool('manter_logado', _keep);
+        // Persistir a escolha de lembrar e-mail
+        if (_rememberEmail) {
+          await prefs.setString('email_salvo', email);
+        } else {
+          await prefs.remove('email_salvo');
+        }
         await prefs.setInt('driver_id', recId);
         await prefs.setString('driver_name', nome);
         idLogado = recId;
@@ -149,11 +157,23 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _checkAutoLogin() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final keep = prefs.getBool('keep_logged_in') ?? false;
+      // inicializar estado do checkbox a partir da preferência salva
+      final savedKeep = prefs.getBool('manter_logado') ?? false;
+      if (mounted) setState(() => _keep = savedKeep);
+      // carregar e-mail salvo se houver
+      final savedEmail = prefs.getString('email_salvo');
+      if (savedEmail != null && savedEmail.isNotEmpty) {
+        if (mounted) {
+          setState(() {
+            _rememberEmail = true;
+            _emailCtl.text = savedEmail;
+          });
+        }
+      }
       final id = prefs.getInt('driver_id') ?? 0;
-      if (keep && id > 0) {
+      if (savedKeep && id > 0) {
         if (!mounted) return;
-        Navigator.pushReplacement(
+        await Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const RotaMotorista()),
         );
@@ -238,6 +258,16 @@ class _LoginPageState extends State<LoginPage> {
                     title: const Text('Manter logado'),
                     value: _keep,
                     onChanged: (v) => setState(() => _keep = v ?? false),
+                    controlAffinity: ListTileControlAffinity.leading,
+                  ),
+
+                  // Lembrar meu e-mail
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Lembrar meu e-mail'),
+                    value: _rememberEmail,
+                    onChanged: (v) =>
+                        setState(() => _rememberEmail = v ?? false),
                     controlAffinity: ListTileControlAffinity.leading,
                   ),
 
