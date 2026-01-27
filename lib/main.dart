@@ -90,7 +90,7 @@ Future<void> main() async {
 
   // Inicializar NotificationService (Firebase Messaging centralizado)
   try {
-    await NotificationService().initialize();
+    await NotificationService().initialize(navigatorKey);
   } catch (_) {}
 
   // Para teste: buscar dados do motorista com `id = 1` no Supabase
