@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'services/cache_service.dart';
@@ -60,6 +61,7 @@ final List<ItemHistorico> historicoEntregas = [];
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -958,7 +960,8 @@ class RotaMotoristaState extends State<RotaMotorista>
       if (token != null && _driverId != 0) {
         await Supabase.instance.client
             .from('motoristas')
-            .update({'fcm_token': token}).eq('id', _driverId);
+            .update({'fcm_token': token})
+            .eq('id', _driverId);
         debugPrint('--- TOKEN SINCRONIZADO: $token ---');
       }
     } catch (e) {
