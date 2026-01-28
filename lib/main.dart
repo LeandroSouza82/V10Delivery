@@ -17,20 +17,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
-
 
 import 'services/cache_service.dart';
 import 'widgets/avisos_modal.dart';
 // import 'package:v10_delivery/auth_pages.dart'; // removido: arquivo não existe no workspace
 import 'globals.dart';
 import 'login_page.dart';
-import 'overlay_manager.dart';
-import 'services/notification_service.dart';
-
-// Navigator key used to show SnackBars from background listeners
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // Número do gestor (formato internacional sem +). Configure aqui.
 const String numeroGestor = '5548996525008';
@@ -81,17 +73,6 @@ Future<void> main() async {
 
   // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
-
-  // Inicializa Firebase para receber notificações
-  await Firebase.initializeApp();
-
-  // Inicializa o gerenciador do overlay (observa ciclo de vida)
-  OverlayManager().init();
-
-  // Inicializar NotificationService (Firebase Messaging centralizado)
-  try {
-    await NotificationService().initialize(navigatorKey);
-  } catch (_) {}
 
   // Para teste: buscar dados do motorista com `id = 1` no Supabase
   // e popular as prefs. Em falha, usar valores de fallback.
@@ -188,8 +169,6 @@ class V10DeliveryApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-        navigatorKey: navigatorKey,
-      title: 'V10 Delivery',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.blue,
@@ -227,31 +206,6 @@ class _SplashPageState extends State<SplashPage> {
     // Carregar nome do motorista salvo nas prefs para evitar persistência incorreta
     _loadSavedName();
     _start();
-    _requestNotificationPermission();
-    _logFcmToken();
-  }
-
-  Future<void> _logFcmToken() async {
-    try {
-      String? token = await FirebaseMessaging.instance.getToken();
-      debugPrint('--- MEU TOKEN FCM ---');
-      debugPrint(token);
-    } catch (e) {
-      debugPrint('Erro ao obter token FCM: $e');
-    }
-  }
-
-  Future<void> _requestNotificationPermission() async {
-    try {
-      final settings = await FirebaseMessaging.instance.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-      debugPrint('FCM Permission status: ${settings.authorizationStatus}');
-    } catch (e) {
-      debugPrint('Erro ao solicitar permissão de notificações: $e');
-    }
   }
 
   Future<void> _loadSavedName() async {

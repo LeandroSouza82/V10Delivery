@@ -52,14 +52,10 @@ dependencies:
   internet_connection_checker: ^1.0.0+1
   retry: ^3.1.0
   sembast: ^3.8.6
-  firebase_core: ^2.10.0
-  firebase_messaging: ^14.4.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  flutter_launcher_icons: ^0.14.4
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -67,7 +63,6 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
-  flutter_overlay_window: ^0.5.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -86,18 +81,9 @@ flutter:
     - assets/audios/final.mp3
     - assets/audios/chama.mp3
     - assets/images/    # To add assets to your application, add an assets section, like this:
-
-# Configuration for flutter_launcher_icons
-flutter_icons:
-  android: true
-  ios: true
-  image_path: "assets/images/icone_sf.png"
-  # Use the same image for adaptive foreground and set a solid background color
-  adaptive_icon_foreground: "assets/images/icone_sf.png"
-  adaptive_icon_background: "#FFFFFF"
-  # If the generated Android legacy icon appears too small, try forcing a different
-  # image for the legacy Android icon (avoids extra transparent padding issues):
-  # image_path_android: "assets/images/icone_sf.png"
+  # assets:
+  #   - images/a_dot_burr.jpeg
+  #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

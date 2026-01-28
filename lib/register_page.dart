@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:mask_text_input_formatter/mask_text_input_formatter.dart';
 import 'login_page.dart';
 
 class RegisterPage extends StatefulWidget {
@@ -16,14 +14,6 @@ class _RegisterPageState extends State<RegisterPage> {
   final _sobrenome = TextEditingController();
   final _cpf = TextEditingController();
   final _telefone = TextEditingController();
-  final _cpfFormatter = MaskTextInputFormatter(
-    mask: '###.###.###-##',
-    filter: {"#": RegExp(r'\d')},
-  );
-  final _phoneFormatter = MaskTextInputFormatter(
-    mask: '(##) #####-####',
-    filter: {"#": RegExp(r'\d')},
-  );
   final _email = TextEditingController();
   final _senha = TextEditingController();
   final _senha2 = TextEditingController();
