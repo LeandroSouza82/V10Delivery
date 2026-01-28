@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'services/cache_service.dart';
 import 'widgets/avisos_modal.dart';
@@ -663,13 +664,18 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {}
     super.initState();
     // Carregar driver_id das SharedPreferences o quanto antes (não-bloqueante)
-    SharedPreferences.getInstance().then((prefs) {
+    SharedPreferences.getInstance().then((prefs) async {
       try {
         _driverId = prefs.getInt('driver_id') ?? 0;
       } catch (_) {
         _driverId = 0;
       }
       debugPrint('🚀 App iniciado - Driver ID: $_driverId');
+      try {
+        await _atualizarTokenNoBanco();
+      } catch (e) {
+        debugPrint('ERRO atualizarTokenNoBanco: $e');
+      }
     });
     // Garantir cache limpo e lista inicial vazia (teste: DB reiniciado com id=1)
     CacheService()
@@ -943,6 +949,21 @@ class RotaMotoristaState extends State<RotaMotorista>
       // serem registrados em pubspec.yaml. Evite alterar esse caminho.
       await _audioPlayer.play(AssetSource('audios/final.mp3'));
     } catch (_) {}
+  }
+
+  // Atualiza token FCM do dispositivo no registro do motorista no Supabase
+  Future<void> _atualizarTokenNoBanco() async {
+    try {
+      String? token = await FirebaseMessaging.instance.getToken();
+      if (token != null && _driverId != 0) {
+        await Supabase.instance.client
+            .from('motoristas')
+            .update({'fcm_token': token}).eq('id', _driverId);
+        debugPrint('--- TOKEN SINCRONIZADO: $token ---');
+      }
+    } catch (e) {
+      debugPrint('ERRO ao sincronizar token FCM: $e');
+    }
   }
 
   Widget _buildIndicatorCard({
