@@ -772,6 +772,12 @@ class RotaMotoristaState extends State<RotaMotorista>
         } catch (_) {}
         _startPolling();
       }
+      // Garantir que o banco reflita o estado salvo
+      try {
+        await _atualizarStatusNoSupabase(_isOnline);
+      } catch (e) {
+        debugPrint('Erro sincronizando status no init: $e');
+      }
     });
     // Garantir cache limpo e lista inicial vazia (teste: DB reiniciado com id=1)
     CacheService()
@@ -1110,6 +1116,19 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
     } catch (e) {
       debugPrint('ERRO ao sincronizar token FCM: $e');
+    }
+  }
+
+  // Atualiza o campo `esta_online` do motorista no Supabase
+  Future<void> _atualizarStatusNoSupabase(bool status) async {
+    if (_driverId == 0) return;
+    try {
+      await Supabase.instance.client
+          .from('motoristas')
+          .update({'esta_online': status})
+          .eq('id', _driverId);
+    } catch (e) {
+      debugPrint('Erro status: $e');
     }
   }
 
@@ -2236,6 +2255,12 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     _isOnline = !_isOnline;
                                   });
                                   await prefs.setBool('is_online', _isOnline);
+                                  // Sincronizar status com Supabase
+                                  try {
+                                    await _atualizarStatusNoSupabase(_isOnline);
+                                  } catch (e) {
+                                    debugPrint('Erro sincronizar status no toggle: $e');
+                                  }
 
                                   if (_isOnline) {
                                     // Start foreground service + polling
