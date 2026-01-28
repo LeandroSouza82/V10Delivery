@@ -1718,14 +1718,14 @@ class RotaMotoristaState extends State<RotaMotorista>
       // Usar driver id carregado anteriormente para filtrar entregas
       final driverIdPref = _driverId;
       if (driverIdPref == 0) {
-        print('⚠️  carregarDados() chamado sem driver_id válido');
+        debugPrint('⚠️  carregarDados() chamado sem driver_id válido');
         // sem motorista definido, não buscar entregas — garantir UI vazia
         _setEntregas([]);
         _atualizarContadores();
         return;
       }
 
-      print('📥 Buscando dados para motorista $driverIdPref...');
+      debugPrint('📥 Buscando dados para motorista $driverIdPref...');
 
       // Fazer query ordenando por `id` desc para trazer os pedidos mais recentes primeiro
       dynamic response = await r.retry(() async {
@@ -1780,31 +1780,31 @@ class RotaMotoristaState extends State<RotaMotorista>
 
         final quantidadeAtual = lista.length;
 
-        print('🔔 VERIFICAÇÃO DE SOM (chama.mp3):');
-        print('   └─ Quantidade anterior: $_totalEntregasAntigo');
-        print('   └─ Quantidade atual: $quantidadeAtual');
+        debugPrint('🔔 VERIFICAÇÃO DE SOM (chama.mp3):');
+        debugPrint('   └─ Quantidade anterior: $_totalEntregasAntigo');
+        debugPrint('   └─ Quantidade atual: $quantidadeAtual');
 
         // Detectar incremento: nova > antiga E não é primeira carga
         if (quantidadeAtual > _totalEntregasAntigo &&
             _totalEntregasAntigo != -1) {
-          print(
+          debugPrint(
             '   └─ ✅ INCREMENTO DETECTADO! (+${quantidadeAtual - _totalEntregasAntigo})',
           );
-          print('   └─ 🔊 Tocando assets/audios/chama.mp3...');
+          debugPrint('   └─ 🔊 Tocando assets/audios/chama.mp3...');
 
           try {
             await _tocarSomSucesso();
-            print('   └─ ✅ Som tocado com sucesso!');
+            debugPrint('   └─ ✅ Som tocado com sucesso!');
           } catch (e) {
-            print('   └─ ❌ ERRO ao tocar som: $e');
+            debugPrint('   └─ ❌ ERRO ao tocar som: $e');
           }
         } else {
           if (_totalEntregasAntigo == -1) {
-            print('   └─ ⏭️  Primeira carga - som não tocará');
+            debugPrint('   └─ ⏭️  Primeira carga - som não tocará');
           } else if (quantidadeAtual == _totalEntregasAntigo) {
-            print('   └─ 📊 Mesma quantidade - sem novos pedidos');
+            debugPrint('   └─ 📊 Mesma quantidade - sem novos pedidos');
           } else {
-            print('   └─ 📉 Quantidade diminuiu - pedido finalizado');
+            debugPrint('   └─ 📉 Quantidade diminuiu - pedido finalizado');
           }
         }
 
@@ -1812,12 +1812,12 @@ class RotaMotoristaState extends State<RotaMotorista>
 
         // Atualizar contador antigo sempre para evitar loop de som
         _totalEntregasAntigo = quantidadeAtual;
-        print('   └─ Variável atualizada para: $_totalEntregasAntigo');
+        debugPrint('   └─ Variável atualizada para: $_totalEntregasAntigo');
 
         // A lista já vem ordenada por id desc; atualizar estado substituindo a lista
         _setEntregas(List<dynamic>.from(lista));
         _atualizarContadores();
-        print('✅ Dados carregados: ${lista.length} registros');
+        debugPrint('✅ Dados carregados: ${lista.length} registros');
         setState(() {
           modoOffline = false;
           // Se ainda não inicializamos o contador antigo, setar para o tamanho atual
