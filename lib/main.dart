@@ -19,6 +19,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'services/cache_service.dart';
 import 'widgets/avisos_modal.dart';
@@ -61,6 +62,9 @@ final List<ItemHistorico> historicoEntregas = [];
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Inicializar porta de comunicação usada pelo foreground task
+  FlutterForegroundTask.initCommunicationPort();
+
   await Firebase.initializeApp();
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -164,6 +168,34 @@ Future<void> main() async {
   } catch (_) {}
 
   runApp(const MyApp());
+}
+
+@pragma('vm:entry-point')
+void startCallback() {
+  FlutterForegroundTask.setTaskHandler(_DeliveryTaskHandler());
+}
+
+class _DeliveryTaskHandler extends TaskHandler {
+  int _count = 0;
+
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    // Inicialização do handler
+    _count = 0;
+  }
+
+  @override
+  void onRepeatEvent(DateTime timestamp) {
+    _count++;
+    // Enviar timestamp para UI principal caso necessário
+    FlutterForegroundTask.sendDataToMain({'timestamp': timestamp.millisecondsSinceEpoch});
+  }
+
+  @override
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
+
+  @override
+  void onNotificationPressed() {}
 }
 
 class V10DeliveryApp extends StatelessWidget {
@@ -658,6 +690,53 @@ class RotaMotoristaState extends State<RotaMotorista>
   @override
   void initState() {
     WidgetsBinding.instance.addObserver(this);
+    // Inicializar serviço de foreground (permissões serão solicitadas)
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        // Checar permissão de notificações (Android 13+)
+        final NotificationPermission permission = await FlutterForegroundTask.checkNotificationPermission();
+        if (permission != NotificationPermission.granted) {
+          await FlutterForegroundTask.requestNotificationPermission();
+        }
+
+        if (Platform.isAndroid) {
+          if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+            // Requer permission android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+          }
+        }
+
+        // Inicializar opções do foreground task
+        FlutterForegroundTask.init(
+          androidNotificationOptions: AndroidNotificationOptions(
+            channelId: 'v10_delivery_fg',
+            channelName: 'v10_delivery Service',
+            channelDescription: 'Serviço em primeiro plano para manter polling ativo',
+            channelImportance: NotificationChannelImportance.LOW,
+            priority: NotificationPriority.LOW,
+            iconData: NotificationIconData(
+              resType: ResourceType.mipmap,
+              resPrefix: ResourcePrefix.ic,
+              name: 'launcher',
+            ),
+            onlyAlertOnce: true,
+          ),
+          iosNotificationOptions: const IOSNotificationOptions(
+            showNotification: false,
+            playSound: false,
+          ),
+          foregroundTaskOptions: ForegroundTaskOptions(
+            eventAction: ForegroundTaskEventAction.repeat(10000),
+            autoRunOnBoot: false,
+            autoRunOnMyPackageReplaced: true,
+            allowWakeLock: true,
+            allowWifiLock: true,
+          ),
+        );
+      } catch (e) {
+        debugPrint('Erro init foreground task: $e');
+      }
+    });
     // iniciar cache service (não bloqueante)
     CacheService().init().catchError((e) => debugPrint('Cache init error: $e'));
     // Manter a tela acesa enquanto o app estiver em primeiro plano
@@ -859,6 +938,37 @@ class RotaMotoristaState extends State<RotaMotorista>
     _entregasController.close();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  Future<void> _startForegroundService() async {
+    try {
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.restartService();
+        return;
+      }
+      await FlutterForegroundTask.startService(
+        serviceId: 256,
+        notificationTitle: 'v10_delivery — Online',
+        notificationText: 'Serviço ativo para manter atualizações',
+        notificationIcon: null,
+        notificationButtons: [
+          const NotificationButton(id: 'stop', text: 'Parar'),
+        ],
+        callback: startCallback,
+      );
+      debugPrint('Foreground service iniciado');
+    } catch (e) {
+      debugPrint('Erro ao iniciar foreground service: $e');
+    }
+  }
+
+  Future<void> _stopForegroundService() async {
+    try {
+      await FlutterForegroundTask.stopService();
+      debugPrint('Foreground service parado');
+    } catch (e) {
+      debugPrint('Erro ao parar foreground service: $e');
+    }
   }
 
   // Atualiza a lista de entregas de forma centralizada e notifica o stream

@@ -54,6 +54,7 @@ dependencies:
   sembast: ^3.8.6
   firebase_core: ^4.4.0
   firebase_messaging: ^16.1.1
+  flutter_foreground_task: ^9.2.0
 
 dev_dependencies:
   flutter_test:
