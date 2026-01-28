@@ -476,6 +476,8 @@ class RotaMotorista extends StatefulWidget {
 class RotaMotoristaState extends State<RotaMotorista>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   String? _avatarPath;
+  // ID do motorista carregado nas prefs — inicializado como 0 por segurança
+  int _driverId = 0;
 
   Future<void> _pickAndSaveAvatar(ImageSource source) async {
     try {
@@ -609,7 +611,9 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Controle para evitar tocar som no primeiro carregamento
   int _totalEntregasAntigo = -1;
   // Indicador visual do polling: pisca a cada verificação; fica vermelho se offline
+  // ignore: prefer_final_fields
   bool _pollingBlink = false;
+  // ignore: prefer_final_fields
   bool _pollingOffline = false;
   // Controller para rolar a lista de entregas quando novos pedidos chegarem
   late ScrollController _entregasScrollController;
@@ -658,6 +662,15 @@ class RotaMotoristaState extends State<RotaMotorista>
       WakelockPlus.enable();
     } catch (_) {}
     super.initState();
+    // Carregar driver_id das SharedPreferences o quanto antes (não-bloqueante)
+    SharedPreferences.getInstance().then((prefs) {
+      try {
+        _driverId = prefs.getInt('driver_id') ?? 0;
+      } catch (_) {
+        _driverId = 0;
+      }
+      debugPrint('🚀 App iniciado - Driver ID: $_driverId');
+    });
     // Garantir cache limpo e lista inicial vazia (teste: DB reiniciado com id=1)
     CacheService()
         .saveEntregas(<Map<String, dynamic>>[])
@@ -693,121 +706,27 @@ class RotaMotoristaState extends State<RotaMotorista>
     // Registrar polling curto para verificar novos pedidos na tabela `entregas`.
     try {
       _entregasScrollController = ScrollController();
-      _entregasPollingTimer = Timer.periodic(const Duration(seconds: 3), (
-        _,
+      // SEGURANÇA: cancelar timer anterior, se existir
+      _entregasPollingTimer?.cancel();
+      _entregasPollingTimer = Timer.periodic(const Duration(seconds: 10), (
+        timer,
       ) async {
         try {
-          // Buscar lista recente (limitada) e comparar tamanho com a lista local
-          final prefsLocal = await SharedPreferences.getInstance();
-          final driverIdPref = prefsLocal.getInt('driver_id') ?? idLogado ?? 0;
-          if (driverIdPref == 0) return;
-          final res = await Supabase.instance.client
-              .from('entregas')
-              .select('*')
-              .eq('motorista_id', driverIdPref)
-              .order('id', ascending: false)
-              .limit(50);
-          final list = res as List<dynamic>? ?? <dynamic>[];
+          final prefs = await SharedPreferences.getInstance();
+          _driverId = prefs.getInt('driver_id') ?? 0;
 
-          // Normalizar para o mesmo formato usado em _setEntregas
-          final novaLista = list.map<Map<String, String>>((e) {
-            final m = Map<String, dynamic>.from(e as Map);
-            return {
-              'id': m['id']?.toString() ?? '',
-              'cliente': m['cliente']?.toString() ?? '',
-              'endereco': m['endereco']?.toString() ?? '',
-              'tipo': m['tipo']?.toString() ?? 'entrega',
-              'status': m['status']?.toString() ?? '',
-              'obs': m['obs']?.toString() ?? '',
-              'observacoes':
-                  m['observacoes']?.toString() ??
-                  m['observacao']?.toString() ??
-                  m['obs']?.toString() ??
-                  '',
-            };
-          }).toList();
+          debugPrint('🔄 POLLING AUTOMÁTICO EXECUTANDO');
+          debugPrint('   └─ Driver ID: $_driverId');
+          debugPrint('   └─ Timestamp: ${DateTime.now()}');
 
-          // Gestão de som: não tocar no primeiro carregamento
-          if (_totalEntregasAntigo == -1) {
-            // primeira vez: apenas inicializar o contador sem tocar
-            if (!mounted) return;
-            setState(() {
-              entregas = List<dynamic>.from(novaLista);
-              _atualizarContadores();
-              _totalEntregasAntigo = novaLista.length;
-            });
-            // salvar em cache local (debounced) para uso offline
-            try {
-              _saveToCacheDebounced(novaLista);
-            } catch (_) {}
-            // garantir que o StreamBuilder receba o novo valor imediatamente
-            try {
-              if (!_entregasController.isClosed) {
-                _entregasController.add(entregas);
-              }
-            } catch (_) {}
-          } else if (novaLista.length > _totalEntregasAntigo) {
-            debugPrint(
-              'CHEGOU NOVO PEDIDO: quantidade anterior=$_totalEntregasAntigo nova=${novaLista.length}',
-            );
-            try {
-              await _tocarSomSucesso();
-            } catch (_) {}
-            // Atualizar lista centralizada e contador dentro de setState
-            if (!mounted) return;
-            setState(() {
-              entregas = List<dynamic>.from(novaLista);
-              _atualizarContadores();
-              _totalEntregasAntigo = novaLista.length;
-            });
-            // salvar em cache local (debounced) para uso offline
-            try {
-              _saveToCacheDebounced(novaLista);
-            } catch (_) {}
-            // garantir que o StreamBuilder receba o novo valor imediatamente
-            try {
-              if (!_entregasController.isClosed) {
-                _entregasController.add(entregas);
-              }
-            } catch (_) {}
-            // rolar para o topo para mostrar o novo card
-            try {
-              if (_entregasScrollController.hasClients) {
-                _entregasScrollController.animateTo(
-                  0.0,
-                  duration: Duration(milliseconds: 400),
-                  curve: Curves.easeOut,
-                );
-              }
-            } catch (_) {}
-            // Atualizar _lastEntregaId com o primeiro item, se existir
-            final firstId = int.tryParse(novaLista.first['id'] ?? '') ?? 0;
-            if (firstId > 0) {
-              _lastEntregaId = firstId;
-            }
-            // Indicar visualmente que o polling aconteceu e estamos online
-            if (!mounted) return;
-            setState(() {
-              _pollingOffline = false;
-              _pollingBlink = true;
-            });
-            Future.delayed(const Duration(milliseconds: 350), () {
-              if (!mounted) return;
-              setState(() {
-                _pollingBlink = false;
-              });
-            });
+          if (_driverId != 0) {
+            debugPrint('📥 Buscando dados para motorista $_driverId...');
+            await carregarDados();
+          } else {
+            debugPrint('⚠️  ERRO: driver_id é null - polling abortado');
           }
-          debugPrint('STATUS REALTIME: polling (entregas)');
         } catch (e) {
-          debugPrint('Erro no polling entregas: $e');
-          // sinalizar offline para o indicador
-          if (mounted) {
-            setState(() {
-              _pollingOffline = true;
-              _pollingBlink = false;
-            });
-          }
+          debugPrint('❌ Erro no polling entregas: $e');
         }
       });
     } catch (e) {
@@ -937,6 +856,17 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Atualiza a lista de entregas de forma centralizada e notifica o stream
   void _setEntregas(List<dynamic> nova) {
     if (!mounted) return;
+    // Se não conhecemos o motorista, não aceitar listas vindas do servidor
+    // — em vez disso garantir que a UI mostre 0 pedidos.
+    if (_driverId == 0) {
+      setState(() => entregas = []);
+      try {
+        if (!_entregasController.isClosed) _entregasController.add(entregas);
+      } catch (_) {}
+      _notifyEntregasDebounced(entregas);
+      return;
+    }
+
     setState(() => entregas = nova);
     _notifyEntregasDebounced(nova);
   }
@@ -996,6 +926,9 @@ class RotaMotoristaState extends State<RotaMotorista>
     try {
       await _audioPlayer.setVolume(1.0);
       await _audioPlayer.stop();
+      try {
+        await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+      } catch (_) {}
       // IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
       // serem registrados em pubspec.yaml. Evite alterar esse caminho.
       await _audioPlayer.play(AssetSource('audios/chama.mp3'));
@@ -1735,7 +1668,17 @@ class RotaMotoristaState extends State<RotaMotorista>
           }).toList();
           if (!mounted) return;
           setState(() {
-            entregas = lista;
+            // Se não sabemos o motorista, mostrar lista vazia para evitar dados globais
+            if (_driverId == 0) {
+              entregas = <Map<String, String>>[];
+            } else {
+              // filtrar cache para incluir apenas entregas do motorista
+              entregas = lista
+                  .where(
+                    (m) => (m['motorista_id'] ?? '') == _driverId.toString(),
+                  )
+                  .toList();
+            }
             _atualizarContadores();
           });
         } else {
@@ -1772,15 +1715,17 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
 
     try {
-      // Buscar driver_id atual para filtrar entregas
-      final prefsLocal = await SharedPreferences.getInstance();
-      final driverIdPref = prefsLocal.getInt('driver_id') ?? idLogado ?? 0;
+      // Usar driver id carregado anteriormente para filtrar entregas
+      final driverIdPref = _driverId;
       if (driverIdPref == 0) {
-        // sem motorista definido, não buscar entregas
+        print('⚠️  carregarDados() chamado sem driver_id válido');
+        // sem motorista definido, não buscar entregas — garantir UI vazia
         _setEntregas([]);
         _atualizarContadores();
         return;
       }
+
+      print('📥 Buscando dados para motorista $driverIdPref...');
 
       // Fazer query ordenando por `id` desc para trazer os pedidos mais recentes primeiro
       dynamic response = await r.retry(() async {
@@ -1803,6 +1748,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             'cliente': m['cliente']?.toString() ?? '',
             'endereco': m['endereco']?.toString() ?? '',
             'tipo': m['tipo']?.toString() ?? 'entrega',
+            'motorista_id': m['motorista_id']?.toString() ?? '',
             // incluir 'status' para preservarmos o estado do item
             'status': m['status']?.toString() ?? '',
             // manter compatibilidade com chave antiga 'obs' e adicionar 'observacoes'
@@ -1815,9 +1761,63 @@ class RotaMotoristaState extends State<RotaMotorista>
           };
         }).toList();
 
+        // Validar que os resultados pertençam ao motorista carregado
+        try {
+          final ok = lista.every(
+            (it) => (it['motorista_id'] ?? '') == _driverId.toString(),
+          );
+          if (!ok) {
+            debugPrint(
+              'Descartando resultados de entregas (carregarDados): motorista mismatch',
+            );
+            return;
+          }
+        } catch (_) {}
+
+        // ================================================================
+        // DETECÇÃO DE NOVO PEDIDO E DISPARO DE SOM chama.mp3
+        // ================================================================
+
+        final quantidadeAtual = lista.length;
+
+        print('🔔 VERIFICAÇÃO DE SOM (chama.mp3):');
+        print('   └─ Quantidade anterior: $_totalEntregasAntigo');
+        print('   └─ Quantidade atual: $quantidadeAtual');
+
+        // Detectar incremento: nova > antiga E não é primeira carga
+        if (quantidadeAtual > _totalEntregasAntigo &&
+            _totalEntregasAntigo != -1) {
+          print(
+            '   └─ ✅ INCREMENTO DETECTADO! (+${quantidadeAtual - _totalEntregasAntigo})',
+          );
+          print('   └─ 🔊 Tocando assets/audios/chama.mp3...');
+
+          try {
+            await _tocarSomSucesso();
+            print('   └─ ✅ Som tocado com sucesso!');
+          } catch (e) {
+            print('   └─ ❌ ERRO ao tocar som: $e');
+          }
+        } else {
+          if (_totalEntregasAntigo == -1) {
+            print('   └─ ⏭️  Primeira carga - som não tocará');
+          } else if (quantidadeAtual == _totalEntregasAntigo) {
+            print('   └─ 📊 Mesma quantidade - sem novos pedidos');
+          } else {
+            print('   └─ 📉 Quantidade diminuiu - pedido finalizado');
+          }
+        }
+
+        // ================================================================
+
+        // Atualizar contador antigo sempre para evitar loop de som
+        _totalEntregasAntigo = quantidadeAtual;
+        print('   └─ Variável atualizada para: $_totalEntregasAntigo');
+
         // A lista já vem ordenada por id desc; atualizar estado substituindo a lista
         _setEntregas(List<dynamic>.from(lista));
         _atualizarContadores();
+        print('✅ Dados carregados: ${lista.length} registros');
         setState(() {
           modoOffline = false;
           // Se ainda não inicializamos o contador antigo, setar para o tamanho atual

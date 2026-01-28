@@ -1,5 +1,5 @@
 package com.example.v10_delivery
 
-import io.flutter.embedding.android.FlutterActivity
-
-class MainActivity : FlutterActivity()
+// Arquivo deixado intencionalmente vazio para evitar referências antigas.
+// A `MainActivity` válida está em com.v10.delivery.MainActivity
+class MainActivityPlaceholder {}
