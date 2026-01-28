@@ -188,7 +188,9 @@ class _DeliveryTaskHandler extends TaskHandler {
   void onRepeatEvent(DateTime timestamp) {
     _count++;
     // Enviar timestamp para UI principal caso necessário
-    FlutterForegroundTask.sendDataToMain({'timestamp': timestamp.millisecondsSinceEpoch});
+    FlutterForegroundTask.sendDataToMain({
+      'timestamp': timestamp.millisecondsSinceEpoch,
+    });
   }
 
   @override
@@ -632,6 +634,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Áudio: usar única instância para evitar consumo excessivo de memória
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _awaitStartChama = false; // usado para iniciar loop após som final
+  // Estado ONLINE/OFFLINE do motorista
+  bool _isOnline = false;
 
   // Lista inicial vazia — será preenchida por `carregarDados()`
   List<dynamic> entregas = [];
@@ -694,7 +698,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         // Checar permissão de notificações (Android 13+)
-        final NotificationPermission permission = await FlutterForegroundTask.checkNotificationPermission();
+        final NotificationPermission permission =
+            await FlutterForegroundTask.checkNotificationPermission();
         if (permission != NotificationPermission.granted) {
           await FlutterForegroundTask.requestNotificationPermission();
         }
@@ -711,7 +716,8 @@ class RotaMotoristaState extends State<RotaMotorista>
           androidNotificationOptions: AndroidNotificationOptions(
             channelId: 'v10_delivery_fg',
             channelName: 'v10_delivery Service',
-            channelDescription: 'Serviço em primeiro plano para manter polling ativo',
+            channelDescription:
+                'Serviço em primeiro plano para manter polling ativo',
             channelImportance: NotificationChannelImportance.LOW,
             priority: NotificationPriority.LOW,
             iconData: NotificationIconData(
@@ -748,6 +754,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     SharedPreferences.getInstance().then((prefs) async {
       try {
         _driverId = prefs.getInt('driver_id') ?? 0;
+        // Restaurar estado online salvo
+        _isOnline = prefs.getBool('is_online') ?? false;
       } catch (_) {
         _driverId = 0;
       }
@@ -756,6 +764,13 @@ class RotaMotoristaState extends State<RotaMotorista>
         await _atualizarTokenNoBanco();
       } catch (e) {
         debugPrint('ERRO atualizarTokenNoBanco: $e');
+      }
+      // Se estava online antes, iniciar service e polling
+      if (_isOnline) {
+        try {
+          await _startForegroundService();
+        } catch (_) {}
+        _startPolling();
       }
     });
     // Garantir cache limpo e lista inicial vazia (teste: DB reiniciado com id=1)
@@ -790,34 +805,11 @@ class RotaMotoristaState extends State<RotaMotorista>
       debugPrint('Erro ao iniciar polling de avisos_gestor: $e');
     }
 
-    // Registrar polling curto para verificar novos pedidos na tabela `entregas`.
+    // Inicializar controller de rolagem e (opcionalmente) polling via _startPolling
     try {
       _entregasScrollController = ScrollController();
-      // SEGURANÇA: cancelar timer anterior, se existir
-      _entregasPollingTimer?.cancel();
-      _entregasPollingTimer = Timer.periodic(const Duration(seconds: 10), (
-        timer,
-      ) async {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          _driverId = prefs.getInt('driver_id') ?? 0;
-
-          debugPrint('🔄 POLLING AUTOMÁTICO EXECUTANDO');
-          debugPrint('   └─ Driver ID: $_driverId');
-          debugPrint('   └─ Timestamp: ${DateTime.now()}');
-
-          if (_driverId != 0) {
-            debugPrint('📥 Buscando dados para motorista $_driverId...');
-            await carregarDados();
-          } else {
-            debugPrint('⚠️  ERRO: driver_id é null - polling abortado');
-          }
-        } catch (e) {
-          debugPrint('❌ Erro no polling entregas: $e');
-        }
-      });
     } catch (e) {
-      debugPrint('Erro ao iniciar polling de entregas: $e');
+      debugPrint('Erro iniciando ScrollController: $e');
     }
 
     // animação de procura de rotas (opacidade pulsante)
@@ -987,6 +979,48 @@ class RotaMotoristaState extends State<RotaMotorista>
 
     setState(() => entregas = nova);
     _notifyEntregasDebounced(nova);
+  }
+
+  // Inicia o polling de entregas (10s)
+  void _startPolling() {
+    try {
+      _entregasPollingTimer?.cancel();
+      _entregasPollingTimer = Timer.periodic(const Duration(seconds: 10), (
+        timer,
+      ) async {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          _driverId = prefs.getInt('driver_id') ?? 0;
+
+          debugPrint('🔄 POLLING AUTOMÁTICO EXECUTANDO');
+          debugPrint('   └─ Driver ID: $_driverId');
+          debugPrint('   └─ Timestamp: ${DateTime.now()}');
+
+          if (_driverId != 0) {
+            debugPrint('📥 Buscando dados para motorista $_driverId...');
+            await carregarDados();
+          } else {
+            debugPrint('⚠️  ERRO: driver_id é null - polling abortado');
+          }
+        } catch (e) {
+          debugPrint('❌ Erro no polling entregas: $e');
+        }
+      });
+      debugPrint('Polling iniciado');
+    } catch (e) {
+      debugPrint('Erro ao iniciar polling de entregas: $e');
+    }
+  }
+
+  // Para o polling de entregas
+  void _stopPolling() {
+    try {
+      _entregasPollingTimer?.cancel();
+      _entregasPollingTimer = null;
+      debugPrint('Polling parado');
+    } catch (e) {
+      debugPrint('Erro ao parar polling: $e');
+    }
   }
 
   void _notifyEntregasDebounced(List<dynamic> nova) {
@@ -2182,12 +2216,69 @@ class RotaMotoristaState extends State<RotaMotorista>
                     Align(
                       alignment: Alignment.centerLeft,
                       child: Builder(
-                        builder: (context) => IconButton(
-                          icon: Icon(
-                            Icons.menu,
-                            color: modoDia ? Colors.black : Colors.white,
-                          ),
-                          onPressed: () => Scaffold.of(context).openEndDrawer(),
+                        builder: (context) => Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                Icons.menu,
+                                color: modoDia ? Colors.black : Colors.white,
+                              ),
+                              onPressed: () => Scaffold.of(context).openEndDrawer(),
+                            ),
+                            const SizedBox(width: 6),
+                            // Botão Online/Offline
+                            GestureDetector(
+                              onTap: () async {
+                                try {
+                                  final prefs = await SharedPreferences.getInstance();
+                                  setState(() {
+                                    _isOnline = !_isOnline;
+                                  });
+                                  await prefs.setBool('is_online', _isOnline);
+
+                                  if (_isOnline) {
+                                    // Start foreground service + polling
+                                    await _startForegroundService();
+                                    _startPolling();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Você está ONLINE')),
+                                    );
+                                  } else {
+                                    // Stop service + polling
+                                    await _stopForegroundService();
+                                    _stopPolling();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Você está OFFLINE')),
+                                    );
+                                  }
+                                } catch (e) {
+                                  debugPrint('Erro toggling online: $e');
+                                }
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: _isOnline ? Colors.green[600] : Colors.grey[700],
+                                  shape: BoxShape.circle,
+                                  boxShadow: _isOnline
+                                      ? [
+                                          BoxShadow(
+                                            color: Colors.green.withOpacity(0.45),
+                                            blurRadius: 8,
+                                            spreadRadius: 1,
+                                          )
+                                        ]
+                                      : null,
+                                ),
+                                child: Icon(
+                                  _isOnline ? Icons.person : Icons.person_outline,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
