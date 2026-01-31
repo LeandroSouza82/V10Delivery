@@ -1,5 +1,6 @@
 name: v10_delivery
-description: "A new Flutter project."
+display_name: "V10 Delivery"
+description: "Aplicativo de Logística V10 Delivery"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -33,6 +34,7 @@ dependencies:
   url_launcher: ^6.1.10
   audioplayers: ^6.5.1
   intl: ^0.18.1
+  geolocator: ^14.0.2
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

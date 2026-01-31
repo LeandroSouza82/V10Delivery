@@ -104,6 +104,10 @@ class _LoginPageState extends State<LoginPage> {
 
         // salvar prefs e variáveis globais
         final prefs = await SharedPreferences.getInstance();
+        // Persistir o e-mail do motorista assim que o login for bem-sucedido
+        try {
+          await prefs.setString('email_salvo', email);
+        } catch (_) {}
         // Persistir a escolha do usuário de manter logado (aguardar a conclusão)
         await prefs.setBool('manter_logado', _keep);
         // Persistir a escolha de lembrar e-mail

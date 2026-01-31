@@ -20,6 +20,8 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:geolocator/geolocator.dart';
+import 'location_service.dart';
 
 import 'services/cache_service.dart';
 import 'widgets/avisos_modal.dart';
@@ -515,6 +517,298 @@ class RotaMotoristaState extends State<RotaMotorista>
   String? _avatarPath;
   // ID do motorista carregado nas prefs — inicializado como 0 por segurança
   int _driverId = 0;
+  // ID do motorista vindo do Supabase (UUID string). Inicializa como '0' até
+  // termos certeza do user logado. Usado para updates no Supabase que esperam UUID.
+  String _motoristaId = '0';
+  // Código curto de fallback adicionado recentemente na tabela `motoristas`
+  int? _codigoV10;
+
+  // Geolocation: subscription para rastreamento em tempo real
+  StreamSubscription<Position>? _positionSubscription;
+
+  // Solicita permissão de localização e inicia o stream de posições
+  Future<void> _requestPermissionAndStartTracking() async {
+    try {
+      final LocationPermission permission =
+          await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (!mounted) return;
+        // Mostrar alerta amigável se permissão negada
+        showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Permissão de Localização'),
+            content: const Text(
+              'O aplicativo precisa da sua localização para funcionar corretamente. Por favor, ative o GPS nas configurações.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      // Iniciar stream de posições com alta precisão
+      final settings = LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 0,
+      );
+
+      // Cancelar subscription anterior se existir
+      try {
+        await _positionSubscription?.cancel();
+      } catch (_) {}
+
+      _positionSubscription =
+          Geolocator.getPositionStream(locationSettings: settings).listen(
+        (Position pos) async {
+          try {
+            final motoristaId = _motoristaId ?? '0';
+            // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
+            if (motoristaId == '0' || motoristaId.isEmpty) return;
+
+            await Supabase.instance.client.from('motoristas').update({
+              'lat': pos.latitude,
+              'lng': pos.longitude,
+              'ultima_atualizacao': DateTime.now().toIso8601String(),
+            }).eq('id', motoristaId);
+          } catch (e) {
+            debugPrint('Erro ao atualizar localização no Supabase: $e');
+          }
+        },
+        onError: (err) {
+          debugPrint('Erro stream geolocalização: $err');
+        },
+      );
+    } catch (e) {
+      debugPrint('Erro ao iniciar rastreamento: $e');
+    }
+  }
+
+  // Helper seguro: tenta iniciar o LocationService com o userId fornecido.
+  // Nota: se você tiver uma classe `LocationService` no projeto, descomente
+  // a chamada interna e remova o body vazio abaixo. Mantemos isto para
+  // não introduzir referências inexistentes que quebrem a build.
+  void _tryStartLocationServiceFor(String userId) {
+    if (userId != '0' && userId.isNotEmpty) {
+      try {
+        LocationService().iniciarRastreio(userId);
+      } catch (e) {
+        debugPrint('Erro ao iniciar LocationService: $e');
+      }
+      return;
+    }
+
+    // Se o userId ainda for '0', tentar repetidamente por um tempo limitado
+    const int maxAttempts = 15;
+    const Duration delayBetween = Duration(seconds: 2);
+    int attempts = 0;
+
+    () async {
+      while (attempts < maxAttempts) {
+        await Future.delayed(delayBetween);
+        attempts++;
+        try {
+          final supaId = Supabase.instance.client.auth.currentUser?.id;
+          debugPrint('DEBUG: Supabase currentSession: ${Supabase.instance.client.auth.currentSession}');
+          String found = supaId ?? '';
+          if (found.isEmpty) {
+            final prefs = await SharedPreferences.getInstance();
+            found = prefs.getString('supabase_user_id') ??
+                prefs.getString('user_id') ??
+                prefs.getString('motorista_uuid') ??
+                prefs.getString('driver_uuid') ??
+                prefs.getInt('driver_id')?.toString() ??
+                '';
+            // Se ainda vazio e temos um _driverId numérico, tentar buscar na tabela
+            if ((found.isEmpty || found == '0') && _driverId != 0) {
+              try {
+                final client = Supabase.instance.client;
+                dynamic q = [];
+                // Tentar buscar por id inteiro
+                try {
+                  final dynamic r = await client
+                      .from('motoristas')
+                      .select('id')
+                      .eq('id', _driverId)
+                      .limit(1);
+                  debugPrint('DEBUG: Query motoristas by int raw: $r');
+                  if (r is List) {
+                    q = r;
+                  } else if (r is Map && r['data'] != null) {
+                    q = r['data'] as List<dynamic>;
+                  }
+                } catch (err) {
+                  debugPrint('DEBUG: Erro query motoristas (int): $err');
+                }
+                // Se não achou, tentar por campo alternativa como motorista_id/string
+                if ((q as List).isEmpty) {
+                  try {
+                    final dynamic r2 = await client
+                        .from('motoristas')
+                        .select('id')
+                        .eq('motorista_id', _driverId.toString())
+                        .limit(1);
+                    debugPrint('DEBUG: Query motoristas by motorista_id raw: $r2');
+                    if (r2 is List) {
+                      q = r2;
+                    } else if (r2 is Map && r2['data'] != null) {
+                      q = r2['data'] as List<dynamic>;
+                    }
+                  } catch (err2) {
+                    debugPrint('DEBUG: Erro query motoristas (motorista_id): $err2');
+                  }
+                }
+                if ((q as List).isNotEmpty) {
+                  final record = (q as List).first as Map<String, dynamic>;
+                  final candidate = (record['id'] ?? '').toString();
+                  if (candidate.isNotEmpty) found = candidate;
+                }
+              } catch (e) {
+                debugPrint('DEBUG: Erro buscando UUID na tabela motoristas: $e');
+              }
+            }
+          }
+          if (found.isNotEmpty && found != '0') {
+            _motoristaId = found;
+            try {
+              LocationService().iniciarRastreio(found);
+              debugPrint('LocationService: iniciado após $attempts tentativas (UUID: $found)');
+            } catch (e) {
+              debugPrint('Erro ao iniciar LocationService após retry: $e');
+            }
+            return;
+          }
+        } catch (e) {
+          debugPrint('Erro no loop de tentativa do UUID: $e');
+        }
+      }
+      debugPrint('ID Supabase não encontrado após $maxAttempts tentativas; rastreio não iniciado.');
+    }();
+  }
+
+  // Busca em cascata a identidade real do motorista.
+  // Retorna um mapa com 'id' (UUID string) e 'codigo_v10' (int) quando encontrado.
+  // Tentativas: 1) supabase.auth.currentUser?.id 2) lookup por email 3) lookup por driver_id nas prefs/tabela
+  Future<Map<String, dynamic>?> buscarIdentidadeReal() async {
+    try {
+      debugPrint('DEBUG: iniciar buscarIdentidadeReal()');
+      // Limpar identificação anterior para evitar troca de identidade ao trocar de conta
+      _motoristaId = '0';
+      _codigoV10 = null;
+      String? email = Supabase.instance.client.auth.currentUser?.email?.trim();
+      bool recoveredFromCache = false;
+      if (email == null || email.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        final cached = prefs.getString('email_salvo');
+        if (cached != null && cached.isNotEmpty) {
+          email = cached.trim();
+          recoveredFromCache = true;
+        }
+      }
+      debugPrint('🔍 DEBUG: Buscando no banco o UUID para o e-mail: ${email ?? 'NULL'}${recoveredFromCache ? ' (recuperado do cache)' : ''}');
+      // Tentativa 1: currentUser
+      final supaId = Supabase.instance.client.auth.currentUser?.id;
+      if (supaId != null && supaId.isNotEmpty && supaId != '0') {
+        debugPrint('DEBUG: encontrado via auth.currentUser: $supaId');
+        return {'id': supaId, 'codigo_v10': null};
+      }
+
+      // Tentativa 2: buscar por e-mail conhecido (fallback)
+      try {
+        if (email != null && email.isNotEmpty) {
+          final dynamic byEmail = await Supabase.instance.client
+              .from('motoristas')
+              .select('id,codigo_v10')
+              .ilike('email', email)
+              .limit(1);
+          debugPrint('DEBUG: query by email raw: $byEmail');
+          List<dynamic> listEmail = [];
+          if (byEmail is List) {
+            listEmail = byEmail;
+          } else if (byEmail is Map && byEmail['data'] != null) {
+            listEmail = byEmail['data'] as List<dynamic>;
+          }
+          if (listEmail.isNotEmpty) {
+            final first = listEmail.first as Map<String, dynamic>;
+            final candidate = (first['id'] ?? '').toString();
+            final codigo = first['codigo_v10'] is int
+                ? first['codigo_v10'] as int
+                : int.tryParse((first['codigo_v10'] ?? '').toString());
+            final nomeBanco = (first['nome'] ?? '').toString();
+            debugPrint('🔍 Logado como: $nomeBanco');
+            if (candidate.isNotEmpty) return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
+          }
+        } else {
+          debugPrint('DEBUG: email do Supabase nulo ou vazio; pulando busca por email.');
+        }
+      } catch (e) {
+        debugPrint('DEBUG: busca por email falhou: $e');
+      }
+
+      // Tentativa 3: usar driver_id das prefs e consultar a tabela para recuperar UUID
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final int? prefDriver = prefs.getInt('driver_id');
+        if (prefDriver != null && prefDriver != 0) {
+          final client = Supabase.instance.client;
+          List<dynamic> res = [];
+          try {
+            final dynamic q = await client
+                .from('motoristas')
+                .select('id')
+                .eq('id', prefDriver)
+                .limit(1);
+            debugPrint('DEBUG: query motoristas by int raw: $q');
+            if (q is List) {
+              res = q;
+            } else if (q is Map && q['data'] != null) {
+              res = q['data'] as List<dynamic>;
+            }
+          } catch (err) {
+            debugPrint('DEBUG: erro query motoristas by int: $err');
+          }
+          if (res.isEmpty) {
+            try {
+              final dynamic q2 = await client
+                  .from('motoristas')
+                  .select('id')
+                  .eq('motorista_id', prefDriver.toString())
+                  .limit(1);
+              debugPrint('DEBUG: query motoristas by motorista_id raw: $q2');
+              if (q2 is List) {
+                res = q2;
+              } else if (q2 is Map && q2['data'] != null) {
+                res = q2['data'] as List<dynamic>;
+              }
+            } catch (err2) {
+              debugPrint('DEBUG: erro query motoristas by motorista_id: $err2');
+            }
+          }
+          if (res.isNotEmpty) {
+            final record = res.first as Map<String, dynamic>;
+            final candidate = (record['id'] ?? '').toString();
+            final codigo = record['codigo_v10'] is int
+                ? record['codigo_v10'] as int
+                : int.tryParse((record['codigo_v10'] ?? '').toString());
+            final nomeBanco = (record['nome'] ?? '').toString();
+            debugPrint('🔍 Logado como: $nomeBanco');
+            if (candidate.isNotEmpty) return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
+          }
+        }
+      } catch (e) {
+        debugPrint('DEBUG: erro consultando prefs/tabla para UUID: $e');
+      }
+    } catch (e) {
+      debugPrint('DEBUG: buscarIdentidadeReal falhou: $e');
+    }
+    return null;
+  }
 
   Future<void> _pickAndSaveAvatar(ImageSource source) async {
     try {
@@ -694,6 +988,13 @@ class RotaMotoristaState extends State<RotaMotorista>
   @override
   void initState() {
     WidgetsBinding.instance.addObserver(this);
+    // Solicitar permissão de localização o mais cedo possível
+    Future.microtask(() async {
+      try {
+        await _requestPermissionAndStartTracking();
+      } catch (_) {}
+    });
+
     // Inicializar serviço de foreground (permissões serão solicitadas)
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
@@ -720,11 +1021,6 @@ class RotaMotoristaState extends State<RotaMotorista>
                 'Serviço em primeiro plano para manter polling ativo',
             channelImportance: NotificationChannelImportance.LOW,
             priority: NotificationPriority.LOW,
-            iconData: NotificationIconData(
-              resType: ResourceType.mipmap,
-              resPrefix: ResourcePrefix.ic,
-              name: 'launcher',
-            ),
             onlyAlertOnce: true,
           ),
           iosNotificationOptions: const IOSNotificationOptions(
@@ -739,6 +1035,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             allowWifiLock: true,
           ),
         );
+        // localização já foi solicitada anteriormente (evita duplicação)
       } catch (e) {
         debugPrint('Erro init foreground task: $e');
       }
@@ -754,12 +1051,62 @@ class RotaMotoristaState extends State<RotaMotorista>
     SharedPreferences.getInstance().then((prefs) async {
       try {
         _driverId = prefs.getInt('driver_id') ?? 0;
+        // Tentar obter UUID do Supabase (aguardando caso ainda não tenha inicializado)
+        debugPrint('DEBUG: Tentando pegar UUID do Supabase...');
+        try {
+          final supaId = Supabase.instance.client.auth.currentUser?.id;
+          if (supaId != null && supaId.isNotEmpty) {
+            _motoristaId = supaId;
+          } else {
+            // Fallback: tentar buscar de várias keys nas SharedPreferences
+            final fromPrefs = prefs.getString('supabase_user_id') ??
+                prefs.getString('user_id') ??
+                prefs.getString('motorista_uuid') ??
+                prefs.getString('driver_uuid') ??
+                prefs.getInt('driver_id')?.toString();
+            _motoristaId = (fromPrefs != null && fromPrefs.isNotEmpty)
+                ? fromPrefs
+                : '0';
+          }
+        } catch (e) {
+          debugPrint('DEBUG: Erro obtendo UUID Supabase: $e');
+          _motoristaId = prefs.getString('supabase_user_id') ??
+              prefs.getString('user_id') ??
+              prefs.getInt('driver_id')?.toString() ??
+              '0';
+        }
         // Restaurar estado online salvo
         _isOnline = prefs.getBool('is_online') ?? false;
       } catch (_) {
         _driverId = 0;
       }
-      debugPrint('🚀 App iniciado - Driver ID: $_driverId');
+      // Buscar identidade real em cascata e iniciar LocationService somente se houver ID válido
+      try {
+        final Map<String, dynamic>? foundMap =
+            await buscarIdentidadeReal();
+        if (foundMap != null && (foundMap['id'] ?? '').toString().isNotEmpty) {
+          final String foundId = (foundMap['id'] ?? '').toString();
+          _motoristaId = foundId;
+          _codigoV10 = foundMap['codigo_v10'] is int
+              ? (foundMap['codigo_v10'] as int)
+              : int.tryParse((foundMap['codigo_v10'] ?? '').toString());
+          debugPrint('🚀 Motorista identificado! UUID: $_motoristaId | Código Curto: ${_codigoV10 ?? 'N/A'}');
+          try {
+            LocationService().iniciarRastreio(_motoristaId);
+            debugPrint('✅ GPS: Rastreio iniciado para o motorista $_motoristaId');
+          } catch (e) {
+            debugPrint('Erro iniciando LocationService: $e');
+          }
+        }
+      } catch (e) {
+        debugPrint('Erro ao buscar identidade real: $e');
+      }
+
+      debugPrint('🚀 App iniciado - Driver ID: $_driverId, Supabase user: $_motoristaId');
+      // Tenta iniciar o serviço de localização (se implementado no projeto)
+      try {
+        _tryStartLocationServiceFor(_motoristaId);
+      } catch (_) {}
       try {
         await _atualizarTokenNoBanco();
       } catch (e) {
@@ -934,6 +1281,9 @@ class RotaMotoristaState extends State<RotaMotorista>
     _entregasDebounce?.cancel();
     _cacheDebounce?.cancel();
     _entregasController.close();
+    try {
+      _positionSubscription?.cancel();
+    } catch (_) {}
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -1678,60 +2028,6 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  Future<void> _abrirMapaComPreferencia(String endereco) async {
-    final encoded = Uri.encodeComponent(endereco);
-    final prefs = await SharedPreferences.getInstance();
-    final sel = prefs.getString(prefSelectedMapKey) ?? '';
-
-    // Tentar abrir esquema do app preferido
-    Uri? uriToLaunch;
-
-    if (sel.toLowerCase().contains('waze')) {
-      uriToLaunch = Uri.parse('waze://?q=$encoded');
-    } else if (sel.toLowerCase().contains('google') ||
-        sel.toLowerCase().contains('maps')) {
-      // usar esquema de navegação direta do Google Maps
-      uriToLaunch = Uri.parse('google.navigation:q=$encoded');
-    } else if (sel.isNotEmpty) {
-      // fallback genérico: tentar mapa web com busca
-      uriToLaunch = Uri.parse(
-        'https://www.google.com/maps/search/?api=1&query=$encoded',
-      );
-    } else {
-      // sem preferência: tentar abrir primeiro app instalado ou fallback web
-      final available = await MapLauncher.installedMaps;
-      if (available.isNotEmpty) {
-        final m = available.first;
-        if (m.mapName.toLowerCase().contains('waze')) {
-          uriToLaunch = Uri.parse('waze://?q=$encoded');
-        } else if (m.mapName.toLowerCase().contains('google')) {
-          uriToLaunch = Uri.parse('comgooglemaps://?q=$encoded');
-        } else {
-          uriToLaunch = Uri.parse(
-            'https://www.google.com/maps/search/?api=1&query=$encoded',
-          );
-        }
-      } else {
-        uriToLaunch = Uri.parse(
-          'https://www.google.com/maps/search/?api=1&query=$encoded',
-        );
-      }
-    }
-
-    // ignore: unnecessary_null_comparison
-    if (uriToLaunch != null) {
-      try {
-        await launchUrl(uriToLaunch, mode: LaunchMode.externalApplication);
-      } catch (_) {
-        // fallback para web
-        final web = Uri.parse(
-          'https://www.google.com/maps/search/?api=1&query=$encoded',
-        );
-        await launchUrl(web, mode: LaunchMode.externalApplication);
-      }
-    }
-  }
-
   Future<void> _abrirPreferenciasMapa() async {
     try {
       final available = await MapLauncher.installedMaps;
@@ -2243,14 +2539,16 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 Icons.menu,
                                 color: modoDia ? Colors.black : Colors.white,
                               ),
-                              onPressed: () => Scaffold.of(context).openEndDrawer(),
+                              onPressed: () =>
+                                  Scaffold.of(context).openEndDrawer(),
                             ),
                             const SizedBox(width: 6),
                             // Botão Online/Offline
                             GestureDetector(
                               onTap: () async {
                                 try {
-                                  final prefs = await SharedPreferences.getInstance();
+                                  final prefs =
+                                      await SharedPreferences.getInstance();
                                   setState(() {
                                     _isOnline = !_isOnline;
                                   });
@@ -2259,7 +2557,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   try {
                                     await _atualizarStatusNoSupabase(_isOnline);
                                   } catch (e) {
-                                    debugPrint('Erro sincronizar status no toggle: $e');
+                                    debugPrint(
+                                      'Erro sincronizar status no toggle: $e',
+                                    );
                                   }
 
                                   if (_isOnline) {
@@ -2267,14 +2567,18 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     await _startForegroundService();
                                     _startPolling();
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text('Você está ONLINE')),
+                                      const SnackBar(
+                                        content: Text('Você está ONLINE'),
+                                      ),
                                     );
                                   } else {
                                     // Stop service + polling
                                     await _stopForegroundService();
                                     _stopPolling();
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text('Você está OFFLINE')),
+                                      const SnackBar(
+                                        content: Text('Você está OFFLINE'),
+                                      ),
                                     );
                                   }
                                 } catch (e) {
@@ -2284,20 +2588,26 @@ class RotaMotoristaState extends State<RotaMotorista>
                               child: Container(
                                 padding: const EdgeInsets.all(6),
                                 decoration: BoxDecoration(
-                                  color: _isOnline ? Colors.green[600] : Colors.grey[700],
+                                  color: _isOnline
+                                      ? Colors.green[600]
+                                      : Colors.grey[700],
                                   shape: BoxShape.circle,
                                   boxShadow: _isOnline
                                       ? [
                                           BoxShadow(
-                                            color: Colors.green.withOpacity(0.45),
+                                            color: Colors.green.withOpacity(
+                                              0.45,
+                                            ),
                                             blurRadius: 8,
                                             spreadRadius: 1,
-                                          )
+                                          ),
                                         ]
                                       : null,
                                 ),
                                 child: Icon(
-                                  _isOnline ? Icons.person : Icons.person_outline,
+                                  _isOnline
+                                      ? Icons.person
+                                      : Icons.person_outline,
                                   color: Colors.white,
                                   size: 20,
                                 ),
@@ -2680,24 +2990,37 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         await SharedPreferences.getInstance();
                                     // tentar marcar motorista como offline no Supabase antes de limpar prefs
                                     try {
-                                      final phone =
-                                          prefs.getString('driver_phone') ?? '';
-                                      final tel = phone.replaceAll(
-                                        RegExp(r'\D'),
-                                        '',
-                                      );
-                                      if (tel.isNotEmpty) {
+                                      // Preferir usar email salvo para localizar o motorista
+                                      final savedEmail = prefs.getString('email_salvo') ??
+                                          Supabase.instance.client.auth.currentUser?.email;
+                                      if (savedEmail != null && savedEmail.isNotEmpty) {
                                         try {
-                                          final client =
-                                              Supabase.instance.client;
-                                          await client
-                                              .from('motoristas')
-                                              .update({'status': 'offline'})
-                                              .eq('telefone', tel);
+                                          final client = Supabase.instance.client;
+                                          await client.from('motoristas').update({
+                                            'status': 'offline',
+                                            'esta_online': false,
+                                            'lat': null,
+                                            'lng': null,
+                                          }).ilike('email', savedEmail);
                                         } catch (e) {
-                                          debugPrint(
-                                            'ERRO LOGOUT: falha ao atualizar status offline: $e',
-                                          );
+                                          debugPrint('ERRO LOGOUT: falha ao atualizar status offline por email: $e');
+                                        }
+                                      } else {
+                                        // Fallback para telefone como antes
+                                        final phone = prefs.getString('driver_phone') ?? '';
+                                        final tel = phone.replaceAll(RegExp(r'\D'), '');
+                                        if (tel.isNotEmpty) {
+                                          try {
+                                            final client = Supabase.instance.client;
+                                            await client.from('motoristas').update({
+                                              'status': 'offline',
+                                              'esta_online': false,
+                                              'lat': null,
+                                              'lng': null,
+                                            }).eq('telefone', tel);
+                                          } catch (e) {
+                                            debugPrint('ERRO LOGOUT: falha ao atualizar status offline por telefone: $e');
+                                          }
                                         }
                                       }
                                     } catch (_) {}
@@ -3066,524 +3389,6 @@ class RotaMotoristaState extends State<RotaMotorista>
                         );
                       },
                     ),
-
-                    SizedBox(height: 8),
-
-                    // Mensagem do gestor (Post-it) com fundo amarelo
-                    if ((item['obs'] ?? '').isNotEmpty)
-                      Container(
-                        width: double.infinity,
-                        padding: EdgeInsets.all(10),
-                        margin: EdgeInsets.only(top: 6, bottom: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.yellow[600],
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black38,
-                              blurRadius: 5,
-                              offset: Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.info_outline,
-                              color: Colors.black,
-                              size: 18,
-                            ),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                item['obs'] ?? '',
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                    SizedBox(height: 8),
-
-                    // LINHA DE BOTÕES
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: modoDia
-                                  ? Colors.blue[400]!
-                                  : Colors.blue[700]!,
-                              foregroundColor: Colors.white,
-                              padding: EdgeInsets.symmetric(
-                                vertical: 14,
-                                horizontal: 20,
-                              ),
-                              minimumSize: Size(80, 48),
-                              textStyle: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            onPressed: () => _abrirMapaComPreferencia(
-                              item['endereco'] ?? '',
-                            ),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text('ROTA'),
-                            ),
-                          ),
-                        ),
-
-                        SizedBox(width: 8),
-
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: modoDia
-                                  ? Colors.red[300]!
-                                  : Colors.red[700]!,
-                              foregroundColor: modoDia
-                                  ? Colors.black
-                                  : Colors.white,
-                              padding: EdgeInsets.symmetric(
-                                vertical: 14,
-                                horizontal: 20,
-                              ),
-                              minimumSize: Size(80, 48),
-                              textStyle: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            onPressed: () {
-                              final TextEditingController
-                              motivoOutrosController = TextEditingController();
-                              final motivos = [
-                                'Cliente Ausente',
-                                'Endereço Incorreto',
-                                'Recusado',
-                                'Danos',
-                                'Tentativa Frustrada',
-                                'Documento Ausente',
-                                'Outros Motivos',
-                                'Sem Acesso',
-                              ];
-
-                              // Reset imagemFalha e motivo ao abrir o modal (garantia explícita)
-                              setState(() {
-                                imagemFalha = null;
-                                motivoFalhaSelecionada = null;
-                              });
-
-                              // Tocar som de falha ao abrir o modal
-                              _tocarSomFalha();
-
-                              showDialog(
-                                context: context,
-                                builder: (ctx) {
-                                  return StatefulBuilder(
-                                    builder: (ctx2, setStateDialog) {
-                                      XFile? pickedImageLocal =
-                                          imagemFalha != null
-                                          ? XFile(imagemFalha!)
-                                          : null;
-                                      String? motivoSelecionadoLocal =
-                                          motivoFalhaSelecionada;
-
-                                      final String pickedPath =
-                                          pickedImageLocal?.path ?? '';
-
-                                      final Color bg = modoDia
-                                          ? Colors.white
-                                          : Colors.grey[900]!;
-                                      final Color textColor = modoDia
-                                          ? Colors.black87
-                                          : Colors.white;
-                                      final Color secondary = modoDia
-                                          ? Colors.black54
-                                          : Colors.white70;
-
-                                      return AlertDialog(
-                                        backgroundColor: bg,
-                                        title: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Text(
-                                              'Relatar Falha',
-                                              style: TextStyle(
-                                                color: textColor,
-                                              ),
-                                            ),
-                                            IconButton(
-                                              icon: Icon(
-                                                Icons.camera_alt,
-                                                color: textColor,
-                                              ),
-                                              onPressed: () async {
-                                                // centraliza a captura em _tirarFoto()
-                                                final XFile? photo =
-                                                    await _tirarFoto();
-                                                if (photo != null) {
-                                                  setState(() {
-                                                    imagemFalha = photo.path;
-                                                  });
-                                                  setStateDialog(
-                                                    () => pickedImageLocal =
-                                                        photo,
-                                                  );
-                                                }
-                                              },
-                                            ),
-                                          ],
-                                        ),
-                                        content: SingleChildScrollView(
-                                          child: SizedBox(
-                                            width:
-                                                MediaQuery.of(
-                                                  context,
-                                                ).size.width *
-                                                0.9,
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.stretch,
-                                              children: [
-                                                // Espaço da Foto (Topo)
-                                                Center(
-                                                  child: Container(
-                                                    width: 96,
-                                                    height: 96,
-                                                    margin: EdgeInsets.only(
-                                                      bottom: 12,
-                                                    ),
-                                                    decoration: BoxDecoration(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            8,
-                                                          ),
-                                                      color: modoDia
-                                                          ? Colors.grey[100]
-                                                          : Colors.grey[850],
-                                                      image:
-                                                          pickedImageLocal !=
-                                                              null
-                                                          ? DecorationImage(
-                                                              image: FileImage(
-                                                                File(
-                                                                  pickedPath,
-                                                                ),
-                                                              ),
-                                                              fit: BoxFit.cover,
-                                                            )
-                                                          : null,
-                                                    ),
-                                                    child:
-                                                        pickedImageLocal == null
-                                                        ? Icon(
-                                                            Icons.camera_alt,
-                                                            color: secondary,
-                                                            size: 36,
-                                                          )
-                                                        : null,
-                                                  ),
-                                                ),
-
-                                                // Seletor de Motivos
-                                                GridView.count(
-                                                  crossAxisCount: 2,
-                                                  mainAxisSpacing: 10,
-                                                  crossAxisSpacing: 10,
-                                                  childAspectRatio: 2.1,
-                                                  shrinkWrap: true,
-                                                  physics:
-                                                      NeverScrollableScrollPhysics(),
-                                                  children: motivos.map((
-                                                    motivo,
-                                                  ) {
-                                                    final bool isSel =
-                                                        motivoSelecionadoLocal ==
-                                                        motivo;
-                                                    return ElevatedButton(
-                                                      style: ElevatedButton.styleFrom(
-                                                        backgroundColor: isSel
-                                                            ? Colors.red
-                                                            : Colors.grey[800],
-                                                        foregroundColor:
-                                                            Colors.white,
-                                                        padding:
-                                                            EdgeInsets.symmetric(
-                                                              vertical: 12,
-                                                            ),
-                                                      ),
-                                                      onPressed: () {
-                                                        setStateDialog(
-                                                          () =>
-                                                              motivoSelecionadoLocal =
-                                                                  motivo,
-                                                        );
-                                                        // atualizar também no estado pai para rastreio/reatividade
-                                                        setState(
-                                                          () =>
-                                                              motivoFalhaSelecionada =
-                                                                  motivo,
-                                                        );
-                                                      },
-                                                      child: Padding(
-                                                        padding:
-                                                            EdgeInsets.symmetric(
-                                                              horizontal: 4,
-                                                            ),
-                                                        child: Text(
-                                                          motivo,
-                                                          textAlign:
-                                                              TextAlign.center,
-                                                          style: TextStyle(
-                                                            fontSize: 12,
-                                                            height: 1.1,
-                                                            color: Colors.white,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    );
-                                                  }).toList(),
-                                                ),
-
-                                                SizedBox(height: 12),
-                                                TextField(
-                                                  controller:
-                                                      motivoOutrosController,
-                                                  style: TextStyle(
-                                                    color: Colors.white,
-                                                  ),
-                                                  decoration: InputDecoration(
-                                                    hintText:
-                                                        'Detalhes (opcional)',
-                                                    hintStyle: TextStyle(
-                                                      color: Colors.white54,
-                                                    ),
-                                                    filled: true,
-                                                    fillColor: Colors.grey[800],
-                                                  ),
-                                                ),
-                                                SizedBox(height: 12),
-
-                                                SizedBox(height: 8),
-
-                                                // Substituído o botão de foto pelo botão de envio
-                                                // O botão permanece travado até que um motivo seja selecionado
-                                                SizedBox(
-                                                  width: double.infinity,
-                                                  child: ElevatedButton(
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor:
-                                                          (motivoSelecionadoLocal !=
-                                                              null)
-                                                          ? Colors.red
-                                                          : Colors.grey[700],
-                                                      padding:
-                                                          EdgeInsets.symmetric(
-                                                            vertical: 16,
-                                                          ),
-                                                      textStyle: TextStyle(
-                                                        fontSize: 16,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                    onPressed:
-                                                        (motivoSelecionadoLocal !=
-                                                            null)
-                                                        ? () async {
-                                                            final detalhesController =
-                                                                motivoOutrosController;
-                                                            final detalhesText =
-                                                                detalhesController
-                                                                    .text
-                                                                    .trim();
-
-                                                            final motivoFinal =
-                                                                motivoSelecionadoLocal ??
-                                                                'Não informado';
-
-                                                            final card =
-                                                                entregas[index];
-                                                            try {
-                                                              try {
-                                                                await _audioPlayer
-                                                                    .setVolume(
-                                                                      1.0,
-                                                                    );
-                                                                await _audioPlayer.play(
-                                                                  AssetSource(
-                                                                    'audios/falha_3.mp3',
-                                                                  ),
-                                                                );
-                                                              } catch (_) {}
-                                                              await Future.delayed(
-                                                                Duration(
-                                                                  milliseconds:
-                                                                      500,
-                                                                ),
-                                                              );
-                                                            } catch (_) {}
-
-                                                            // Primeiro, tentar atualizar no Supabase
-                                                            final payload = {
-                                                              'motivo_nao_entrega':
-                                                                  motivoFinal,
-                                                              'obs':
-                                                                  detalhesText,
-                                                              'data_conclusao':
-                                                                  DateTime.now()
-                                                                      .toIso8601String(),
-                                                              'status': 'falha',
-                                                            };
-
-                                                            dynamic res;
-                                                            try {
-                                                              res = await Supabase
-                                                                  .instance
-                                                                  .client
-                                                                  .from(
-                                                                    'entregas',
-                                                                  )
-                                                                  .update(
-                                                                    payload,
-                                                                  )
-                                                                  .eq(
-                                                                    'id',
-                                                                    card['id'],
-                                                                  )
-                                                                  .select();
-                                                            } catch (err) {
-                                                              debugPrint(
-                                                                'ERRO NO UPDATE FALHA: $err',
-                                                              );
-                                                              if (mounted) {
-                                                                ScaffoldMessenger.of(
-                                                                  context,
-                                                                ).showSnackBar(
-                                                                  SnackBar(
-                                                                    content: Text(
-                                                                      'Falha ao salvar motivo no servidor.',
-                                                                    ),
-                                                                  ),
-                                                                );
-                                                              }
-                                                              return;
-                                                            }
-
-                                                            // Se update OK, proceder com envio/remoção local
-                                                            if (res is List &&
-                                                                res.isNotEmpty) {
-                                                              await _enviarFalha(
-                                                                card['id'] ??
-                                                                    '',
-                                                                card['cliente'] ??
-                                                                    '',
-                                                                card['endereco'] ??
-                                                                    '',
-                                                                motivoFinal,
-                                                                detalhesText,
-                                                              );
-
-                                                              // remover localmente após persistência
-                                                              setState(() {
-                                                                entregas.removeWhere(
-                                                                  (c) =>
-                                                                      c['id'] ==
-                                                                      card['id'],
-                                                                );
-                                                              });
-                                                              // Notificar stream/UI que a lista mudou
-                                                              _notifyEntregasDebounced(
-                                                                List<
-                                                                  dynamic
-                                                                >.from(
-                                                                  entregas,
-                                                                ),
-                                                              );
-                                                            } else {
-                                                              if (mounted) {
-                                                                ScaffoldMessenger.of(
-                                                                  context,
-                                                                ).showSnackBar(
-                                                                  SnackBar(
-                                                                    content: Text(
-                                                                      'Atualização não confirmada pelo servidor.',
-                                                                    ),
-                                                                  ),
-                                                                );
-                                                              }
-                                                            }
-                                                          }
-                                                        : null,
-                                                    child: Text(
-                                                      'ENVIAR NOTIFICAÇÃO',
-                                                      style: TextStyle(
-                                                        color: Colors.white,
-                                                        fontWeight: modoDia
-                                                            ? FontWeight.bold
-                                                            : FontWeight.normal,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                },
-                              );
-                            },
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text('FALHA'),
-                            ),
-                          ),
-                        ),
-
-                        SizedBox(width: 8),
-
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: modoDia
-                                  ? Colors.green[400]!
-                                  : Colors.green[700]!,
-                              foregroundColor: modoDia
-                                  ? Colors.black
-                                  : Colors.white,
-                              padding: EdgeInsets.symmetric(
-                                vertical: 14,
-                                horizontal: 20,
-                              ),
-                              minimumSize: Size(80, 48),
-                              textStyle: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            onPressed: () => _buildSuccessModal(
-                              context,
-                              Map<String, dynamic>.from(item),
-                            ),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text('OK'),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
                   ],
                 ),
               ),
@@ -3592,6 +3397,27 @@ class RotaMotoristaState extends State<RotaMotorista>
         ],
       ),
     );
+  }
+
+  Future<void> _abrirMapaComPreferencia(String endereco) async {
+    final encoded = Uri.encodeComponent(endereco);
+
+    final googleMapsUrl =
+        'https://www.google.com/maps/dir/?api=1&destination=$encoded';
+    try {
+      final uri = Uri.parse(googleMapsUrl);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Não foi possível abrir o mapa.')),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Erro ao abrir mapa: $e');
+    }
   }
 
   // ` _buildIndicatorCard` removed — header simplified and indicators unused
