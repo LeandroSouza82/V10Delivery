@@ -21,6 +21,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
+import 'dart:convert';
 import 'location_service.dart';
 
 import 'services/cache_service.dart';
@@ -68,6 +69,9 @@ Future<void> main() async {
   FlutterForegroundTask.initCommunicationPort();
 
   await Firebase.initializeApp();
+  try {
+    await FirebaseMessaging.instance.requestPermission();
+  } catch (_) {}
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -179,20 +183,75 @@ void startCallback() {
 
 class _DeliveryTaskHandler extends TaskHandler {
   int _count = 0;
+  bool _isPolling = false;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     // Inicialização do handler
     _count = 0;
+    // Garantir que o Supabase esteja inicializado dentro do isolate do foreground task
+    try {
+      // Tentar acessar o client; se não inicializado isso pode lançar
+      final _ = Supabase.instance.client;
+      debugPrint('Supabase já inicializado no isolate');
+    } catch (_) {
+      try {
+        await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
+        debugPrint('Supabase inicializado no isolate do foreground task');
+      } catch (e) {
+        debugPrint('Falha ao inicializar Supabase no isolate: $e');
+      }
+    }
   }
 
   @override
-  void onRepeatEvent(DateTime timestamp) {
+  Future<void> onRepeatEvent(DateTime timestamp) async {
     _count++;
-    // Enviar timestamp para UI principal caso necessário
-    FlutterForegroundTask.sendDataToMain({
-      'timestamp': timestamp.millisecondsSinceEpoch,
-    });
+    try {
+      final String? uuidReal = await FlutterForegroundTask.getData<String>(key: 'driverId');
+      if (uuidReal == null || uuidReal == '0' || uuidReal.isEmpty) {
+        print('DEBUG: Aguardando ID real do storage...');
+        return;
+      }
+
+      debugPrint('└─ Driver ID: $uuidReal');
+
+      // Evitar reentrância: se já estiver em polling, pular esta execução
+      if (_isPolling) {
+        return;
+      }
+      _isPolling = true;
+      try {
+        // Tentar buscar entregas para o motorista usando o UUID recuperado
+        final response = await Supabase.instance.client
+            .from('entregas')
+            .select('*')
+            .eq('motorista_id', uuidReal)
+            .or('status.eq.aguardando,status.eq.pendente')
+            .order('id', ascending: false);
+
+        final List<dynamic> lista = (response is List) ? response : <dynamic>[];
+        debugPrint('📦 Entregas encontradas: ${lista.length}');
+
+        FlutterForegroundTask.sendDataToMain({
+          'entregas': lista,
+          'driverId': uuidReal,
+          'timestamp': DateTime.now().toIso8601String(),
+        });
+        try {
+          // Também salvar em storage para que a UI possa recuperar caso a ponte esteja interrompida
+          await FlutterForegroundTask.saveData(key: 'entregas', value: jsonEncode(lista));
+        } catch (e) {
+          debugPrint('Erro ao salvar entregas no foreground storage: $e');
+        }
+      } catch (e) {
+        debugPrint('BG: falha ao buscar entregas no supabase: $e');
+      } finally {
+        _isPolling = false;
+      }
+    } catch (e) {
+      debugPrint('Erro ao obter driverId no foreground storage: $e');
+    }
   }
 
   @override
@@ -243,6 +302,8 @@ class _SplashPageState extends State<SplashPage> {
   void initState() {
     super.initState();
     // Carregar nome do motorista salvo nas prefs para evitar persistência incorreta
+    _loadSavedName();
+    _start();
     _loadSavedName();
     _start();
   }
@@ -525,6 +586,9 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Geolocation: subscription para rastreamento em tempo real
   StreamSubscription<Position>? _positionSubscription;
+  // Timer para checar storage do foreground task e repassar dados para UI
+  Timer? _fgStorageTimer;
+  String? _lastEntregasJson;
 
   // Solicita permissão de localização e inicia o stream de posições
   Future<void> _requestPermissionAndStartTracking() async {
@@ -827,6 +891,29 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {}
   }
 
+  // Recebe dados vindos do foreground task (ou do fallback de storage)
+  void _onReceiveTaskData(Object data) {
+    try {
+      debugPrint('📺 UI RECEBEU DADOS: $data');
+      if (data is Map && data['entregas'] != null) {
+        final dynamic raw = data['entregas'];
+        List<dynamic> parsed = [];
+        if (raw is String) {
+          parsed = jsonDecode(raw) as List<dynamic>;
+        } else if (raw is List) {
+          parsed = raw;
+        }
+        // Atualizar lista local sem forçar conversões de tipos
+        setState(() {
+          entregas = List<dynamic>.from(parsed.map((e) => e as Map<String, dynamic>));
+        });
+        _notifyEntregasDebounced(entregas);
+      }
+    } catch (e) {
+      debugPrint('Erro em _onReceiveTaskData: $e');
+    }
+  }
+
   void _showAvatarPickerOptions() {
     final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
     final Color textColor = modoDia ? Colors.black : Colors.white;
@@ -943,6 +1030,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   int _lastEntregaId = 0;
   // Controle para evitar tocar som no primeiro carregamento
   int _totalEntregasAntigo = -1;
+  // Indica se já houve ao menos um carregamento bem-sucedido (para permitir tocar som)
+  bool _hasInitialSync = false;
   // Indicador visual do polling: pisca a cada verificação; fica vermelho se offline
   // ignore: prefer_final_fields
   bool _pollingBlink = false;
@@ -1035,6 +1124,23 @@ class RotaMotoristaState extends State<RotaMotorista>
             allowWifiLock: true,
           ),
         );
+        // Escutar refresh de token FCM e sincronizar com o banco
+        try {
+          FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+            debugPrint('FCM token refreshed: $newToken');
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              if (newToken != null && newToken.isNotEmpty) {
+                await prefs.setString('fcm_token', newToken);
+                debugPrint('FCM token salvo em prefs: $newToken');
+              }
+            } catch (e) {
+              debugPrint('Erro onTokenRefresh handler: $e');
+            }
+          });
+        } catch (e) {
+          debugPrint('Erro registrando listener de token FCM: $e');
+        }
         // localização já foi solicitada anteriormente (evita duplicação)
       } catch (e) {
         debugPrint('Erro init foreground task: $e');
@@ -1096,6 +1202,30 @@ class RotaMotoristaState extends State<RotaMotorista>
             debugPrint('✅ GPS: Rastreio iniciado para o motorista $_motoristaId');
           } catch (e) {
             debugPrint('Erro iniciando LocationService: $e');
+          }
+          // Garantir registro do token FCM mesmo em auto-login
+          try {
+            try {
+              await FirebaseMessaging.instance.requestPermission();
+            } catch (_) {}
+            final fcmToken = await FirebaseMessaging.instance.getToken();
+            if (fcmToken != null && fcmToken.isNotEmpty) {
+              try {
+                await Supabase.instance.client
+                    .from('motoristas')
+                    .update({'fcm_token': fcmToken})
+                    .eq('id', _motoristaId);
+              } catch (e) {
+                debugPrint('Erro atualizando fcm_token no banco: $e');
+              }
+              try {
+                await prefs.setString('fcm_token', fcmToken);
+              } catch (_) {}
+            } else {
+              debugPrint('FCM token ausente durante auto-login para $_motoristaId');
+            }
+          } catch (e) {
+            debugPrint('Erro ao obter/registrar FCM no auto-login: $e');
           }
         }
       } catch (e) {
@@ -1282,6 +1412,9 @@ class RotaMotoristaState extends State<RotaMotorista>
     _cacheDebounce?.cancel();
     _entregasController.close();
     try {
+      _fgStorageTimer?.cancel();
+    } catch (_) {}
+    try {
       _positionSubscription?.cancel();
     } catch (_) {}
     WidgetsBinding.instance.removeObserver(this);
@@ -1293,6 +1426,16 @@ class RotaMotoristaState extends State<RotaMotorista>
       if (await FlutterForegroundTask.isRunningService) {
         await FlutterForegroundTask.restartService();
         return;
+      }
+      try {
+        if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
+          await FlutterForegroundTask.saveData(key: 'driverId', value: _motoristaId);
+          debugPrint('📥 driverId salvo no foreground-task storage: $_motoristaId');
+        } else {
+          debugPrint('⚠️ driverId inválido; não salvo no foreground-task storage');
+        }
+      } catch (e) {
+        debugPrint('Erro ao salvar driverId no foreground storage: $e');
       }
       await FlutterForegroundTask.startService(
         serviceId: 256,
@@ -1322,9 +1465,9 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Atualiza a lista de entregas de forma centralizada e notifica o stream
   void _setEntregas(List<dynamic> nova) {
     if (!mounted) return;
-    // Se não conhecemos o motorista, não aceitar listas vindas do servidor
+    // Se não conhecemos o motorista (nem numeric nem UUID), não aceitar listas vindas do servidor
     // — em vez disso garantir que a UI mostre 0 pedidos.
-    if (_driverId == 0) {
+    if (_driverId == 0 && (_motoristaId == '0' || _motoristaId.isEmpty)) {
       setState(() => entregas = []);
       try {
         if (!_entregasController.isClosed) _entregasController.add(entregas);
@@ -1345,19 +1488,17 @@ class RotaMotoristaState extends State<RotaMotorista>
         timer,
       ) async {
         try {
-          final prefs = await SharedPreferences.getInstance();
-          _driverId = prefs.getInt('driver_id') ?? 0;
+          // Ler driverId diretamente do storage do foreground task (fonte da verdade)
+          final String? storedId = await FlutterForegroundTask.getData<String>(key: 'driverId');
+          // silenciosamente não faz nada se não houver id válido
+          if (storedId == null || storedId == '0' || storedId.isEmpty) return;
 
           debugPrint('🔄 POLLING AUTOMÁTICO EXECUTANDO');
-          debugPrint('   └─ Driver ID: $_driverId');
           debugPrint('   └─ Timestamp: ${DateTime.now()}');
+          debugPrint('   └─ Driver ID (storage): $storedId');
 
-          if (_driverId != 0) {
-            debugPrint('📥 Buscando dados para motorista $_driverId...');
-            await carregarDados();
-          } else {
-            debugPrint('⚠️  ERRO: driver_id é null - polling abortado');
-          }
+          // Forçar carregar dados usando o UUID recuperado
+          await carregarDados();
         } catch (e) {
           debugPrint('❌ Erro no polling entregas: $e');
         }
@@ -1457,12 +1598,24 @@ class RotaMotoristaState extends State<RotaMotorista>
   Future<void> _atualizarTokenNoBanco() async {
     try {
       String? token = await FirebaseMessaging.instance.getToken();
-      if (token != null && _driverId != 0) {
-        await Supabase.instance.client
-            .from('motoristas')
-            .update({'fcm_token': token})
-            .eq('id', _driverId);
-        debugPrint('--- TOKEN SINCRONIZADO: $token ---');
+      if (token != null && token.isNotEmpty) {
+        if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
+          await Supabase.instance.client
+              .from('motoristas')
+              .update({'fcm_token': token})
+              .eq('id', _motoristaId);
+        } else if (_driverId != 0) {
+          await Supabase.instance.client
+              .from('motoristas')
+              .update({'fcm_token': token})
+              .eq('id', _driverId);
+        }
+        // log claro para auditoria
+        print('🚀 Token FCM salvo: $token');
+        try {
+          await SharedPreferences.getInstance()
+              .then((prefs) => prefs.setString('fcm_token', token));
+        } catch (_) {}
       }
     } catch (e) {
       debugPrint('ERRO ao sincronizar token FCM: $e');
@@ -2198,24 +2351,43 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
 
     try {
-      // Usar driver id carregado anteriormente para filtrar entregas
-      final driverIdPref = _driverId;
-      if (driverIdPref == 0) {
-        debugPrint('⚠️  carregarDados() chamado sem driver_id válido');
-        // sem motorista definido, não buscar entregas — garantir UI vazia
-        _setEntregas([]);
-        _atualizarContadores();
-        return;
+      // Tentar recuperar o `driverId` salvo no storage do foreground task
+      String? storedId;
+      try {
+        storedId = await FlutterForegroundTask.getData<String>(key: 'driverId');
+      } catch (e) {
+        debugPrint('Erro ao ler driverId do foreground storage: $e');
+        storedId = null;
       }
 
-      debugPrint('📥 Buscando dados para motorista $driverIdPref...');
+      String driverIdForQuery;
+      if (storedId != null && storedId.isNotEmpty && storedId != '0') {
+        driverIdForQuery = storedId;
+      } else {
+        if (storedId == null) {
+          debugPrint('⚠️ carregarDados(): leitura do storage retornou null para driverId');
+        } else {
+          debugPrint('⚠️ carregarDados(): driverId salvo inválido ("$storedId")');
+        }
+        // fallback para `_driverId` numérico quando possível
+        if (_driverId != 0) {
+          driverIdForQuery = _driverId.toString();
+        } else {
+          debugPrint('⚠️  carregarDados() chamado sem driver_id válido');
+          _setEntregas([]);
+          _atualizarContadores();
+          return;
+        }
+      }
+
+      debugPrint('📥 Buscando dados para motorista $driverIdForQuery...');
 
       // Fazer query ordenando por `id` desc para trazer os pedidos mais recentes primeiro
       dynamic response = await r.retry(() async {
         return await Supabase.instance.client
-            .from('entregas')
-            .select('*')
-            .eq('motorista_id', driverIdPref)
+          .from('entregas')
+          .select('*')
+          .eq('motorista_id', driverIdForQuery)
             .or('status.eq.pendente,status.eq.em_rota')
             .order('id', ascending: false);
       }, retryIf: (e) => e is SocketException || e is TimeoutException);
@@ -2244,10 +2416,10 @@ class RotaMotoristaState extends State<RotaMotorista>
           };
         }).toList();
 
-        // Validar que os resultados pertençam ao motorista carregado
+        // Validar que os resultados pertençam ao motorista carregado (usar driverIdForQuery)
         try {
           final ok = lista.every(
-            (it) => (it['motorista_id'] ?? '') == _driverId.toString(),
+            (it) => (it['motorista_id'] ?? '') == driverIdForQuery,
           );
           if (!ok) {
             debugPrint(
@@ -2267,9 +2439,8 @@ class RotaMotoristaState extends State<RotaMotorista>
         debugPrint('   └─ Quantidade anterior: $_totalEntregasAntigo');
         debugPrint('   └─ Quantidade atual: $quantidadeAtual');
 
-        // Detectar incremento: nova > antiga E não é primeira carga
-        if (quantidadeAtual > _totalEntregasAntigo &&
-            _totalEntregasAntigo != -1) {
+        // Detectar incremento: nova > antiga E já tivemos pelo menos um carregamento anterior
+        if (_hasInitialSync && quantidadeAtual > _totalEntregasAntigo) {
           debugPrint(
             '   └─ ✅ INCREMENTO DETECTADO! (+${quantidadeAtual - _totalEntregasAntigo})',
           );
@@ -2282,7 +2453,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             debugPrint('   └─ ❌ ERRO ao tocar som: $e');
           }
         } else {
-          if (_totalEntregasAntigo == -1) {
+          if (!_hasInitialSync) {
             debugPrint('   └─ ⏭️  Primeira carga - som não tocará');
           } else if (quantidadeAtual == _totalEntregasAntigo) {
             debugPrint('   └─ 📊 Mesma quantidade - sem novos pedidos');
@@ -2301,12 +2472,16 @@ class RotaMotoristaState extends State<RotaMotorista>
         _setEntregas(List<dynamic>.from(lista));
         _atualizarContadores();
         debugPrint('✅ Dados carregados: ${lista.length} registros');
+        // Log produtivo de sucesso do polling
+        debugPrint('✅ Polling: [${lista.length}] entregas sincronizadas para o motorista [$driverIdForQuery]');
         setState(() {
           modoOffline = false;
           // Se ainda não inicializamos o contador antigo, setar para o tamanho atual
           if (_totalEntregasAntigo == -1) {
             _totalEntregasAntigo = lista.length;
           }
+          // Marcar que já tivemos ao menos um carregamento bem-sucedido
+          _hasInitialSync = true;
         });
         // forçar rebuild adicional para garantir atualização imediata da UI
         if (mounted) setState(() {});

@@ -7,6 +7,7 @@ import 'register_page.dart';
 import 'admin_approval_page.dart';
 import 'globals.dart';
 import 'main.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -120,6 +121,44 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setString('driver_name', nome);
         idLogado = recId;
         nomeMotorista = nome;
+
+        // Registrar token FCM para este motorista (pede permissão e atualiza tabela)
+        try {
+          try {
+            await FirebaseMessaging.instance.requestPermission();
+          } catch (_) {}
+          final fcmToken = await FirebaseMessaging.instance.getToken();
+          if (fcmToken != null && fcmToken.isNotEmpty) {
+            try {
+              // Preferir atualizar pelo UUID se presente no registro retornado
+              final possibleId = record['id'];
+              if (possibleId is String && possibleId.contains('-')) {
+                await Supabase.instance.client
+                    .from('motoristas')
+                    .update({'fcm_token': fcmToken})
+                    .eq('id', possibleId);
+              } else {
+                await Supabase.instance.client
+                    .from('motoristas')
+                    .update({'fcm_token': fcmToken})
+                    .eq('email', email);
+              }
+              // Log pedido: token salvo
+              print('🚀 Token FCM salvo: $fcmToken');
+            } catch (e) {
+              // não bloquear o login por falha ao atualizar o banco
+              debugPrint('Erro atualizando fcm_token no login: $e');
+            }
+            try {
+              await prefs.setString('fcm_token', fcmToken);
+            } catch (_) {}
+          } else {
+            // token nulo — pode acontecer em ambientes de teste
+            debugPrint('FCM token ausente para $email');
+          }
+        } catch (e) {
+          debugPrint('Erro ao registrar FCM: $e');
+        }
 
         if (!mounted) return;
         Navigator.pushReplacement(

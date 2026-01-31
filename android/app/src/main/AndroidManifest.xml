@@ -9,6 +9,7 @@
     <!-- Permissões para suportar execução em segundo plano e manter o dispositivo ativo -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Permissões de rede necessárias (devem ficar imediatamente antes de <application>) -->
     <uses-permission android:name="android.permission.INTERNET" />
