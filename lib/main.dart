@@ -30,8 +30,8 @@ import 'widgets/avisos_modal.dart';
 import 'globals.dart';
 import 'login_page.dart';
 
-// Número do gestor (formato internacional sem +). Configure aqui.
-const String numeroGestor = '5548996525008';
+// Número do gestor (formato internacional sem +).
+// Nota: agora carregamos dinamicamente em tempo de execução a partir da tabela `configuracoes`.
 const String prefSelectedMapKey = 'selected_map_app';
 
 // Supabase configuration - keep hardcoded and trimmed
@@ -61,17 +61,15 @@ class ItemHistorico {
   });
 }
 
+// Histórico global de entregas finalizadas
 final List<ItemHistorico> historicoEntregas = [];
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Inicializar porta de comunicação usada pelo foreground task
-  FlutterForegroundTask.initCommunicationPort();
-
-  await Firebase.initializeApp();
   try {
-    await FirebaseMessaging.instance.requestPermission();
+    await Firebase.initializeApp();
   } catch (_) {}
+
+  await FirebaseMessaging.instance.requestPermission();
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -87,49 +85,30 @@ Future<void> main() async {
   // CONFIGURAÇÃO OFICIAL - NÃO ALTERAR
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
 
-  // Para teste: buscar dados do motorista com `id = 1` no Supabase
-  // e popular as prefs. Em falha, usar valores de fallback.
-  const int userId = 1;
+  // Para teste: buscar dados do motorista pelo UUID de teste (substitui o uso
+  // de id numérico durante desenvolvimento). Em produção o `driverId` real
+  // deve vir do foreground storage pelo processo de login.
+  const String testDriverUuid = '00c21342-1d55-4feb-bb5a-0045f9fdd095';
   try {
     final prefs = await SharedPreferences.getInstance();
     try {
       final client = Supabase.instance.client;
 
-      // Primeiro, tente buscar assumindo que `id` é inteiro
       List<dynamic> res = [];
       try {
         final dynamic q = await client
             .from('motoristas')
             .select('id,nome,avatar_path,telefone')
-            .eq('id', userId)
+            .eq('id', testDriverUuid)
             .limit(1);
-        debugPrint('Supabase query (int) raw: $q');
+        debugPrint('Supabase query (uuid test) raw: $q');
         if (q is List) {
           res = q;
         } else if (q is Map && q['data'] != null) {
           res = q['data'] as List<dynamic>;
         }
       } catch (err) {
-        debugPrint('Erro Supabase (int try): $err');
-      }
-
-      // Se vazio, tente como string (UUID)
-      if (res.isEmpty) {
-        try {
-          final dynamic q2 = await client
-              .from('motoristas')
-              .select('*')
-              .eq('id', userId.toString())
-              .limit(1);
-          debugPrint('Supabase query (string) raw: $q2');
-          if (q2 is List) {
-            res = q2;
-          } else if (q2 is Map && q2['data'] != null) {
-            res = q2['data'] as List<dynamic>;
-          }
-        } catch (err2) {
-          debugPrint('Erro Supabase (string try): $err2');
-        }
+        debugPrint('Erro Supabase (uuid try): $err');
       }
 
       debugPrint('Resultado da Query: $res');
@@ -138,38 +117,33 @@ Future<void> main() async {
         final record = res.first as Map<String, dynamic>;
         final dbName = (record['nome'] ?? '').toString();
         final dbAvatar = (record['avatar_path'] ?? '').toString();
-        final recId = record['id'] is int
-            ? record['id'] as int
-            : int.tryParse(record['id'].toString()) ?? userId;
+        final recUuid = (record['id'] ?? '').toString();
 
-        await prefs.setInt('driver_id', recId);
-        idLogado = recId;
+        await prefs.setString('driver_uuid', recUuid);
 
         if (dbName.isNotEmpty) {
           await prefs.setString('driver_name', dbName);
           nomeMotorista = dbName;
         } else {
-          await prefs.setString('driver_name', 'Motorista #$userId');
-          nomeMotorista = 'Motorista #$userId';
+          await prefs.setString('driver_name', 'Motorista');
+          nomeMotorista = 'Motorista';
         }
 
         if (dbAvatar.isNotEmpty) {
           await prefs.setString('avatar_path', dbAvatar);
         }
       } else {
-        // Nenhum registro: usar fallback
-        await prefs.setInt('driver_id', userId);
-        await prefs.setString('driver_name', 'Motorista #$userId');
-        idLogado = userId;
-        nomeMotorista = 'Motorista #$userId';
+        // Nenhum registro: gravar UUID de teste nas prefs para desenvolvimento
+        await prefs.setString('driver_uuid', testDriverUuid);
+        await prefs.setString('driver_name', 'Motorista');
+        nomeMotorista = 'Motorista';
       }
     } catch (e) {
       debugPrint('Erro Supabase: $e');
-      // Falha na consulta: fallback local
-      await prefs.setInt('driver_id', userId);
-      await prefs.setString('driver_name', 'Motorista #$userId');
-      idLogado = userId;
-      nomeMotorista = 'Motorista #$userId';
+      // Falha na consulta: gravar UUID de teste localmente
+      await prefs.setString('driver_uuid', testDriverUuid);
+      await prefs.setString('driver_name', 'Motorista');
+      nomeMotorista = 'Motorista';
     }
   } catch (_) {}
 
@@ -196,7 +170,10 @@ class _DeliveryTaskHandler extends TaskHandler {
       debugPrint('Supabase já inicializado no isolate');
     } catch (_) {
       try {
-        await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey.trim());
+        await Supabase.initialize(
+          url: supabaseUrl,
+          anonKey: supabaseAnonKey.trim(),
+        );
         debugPrint('Supabase inicializado no isolate do foreground task');
       } catch (e) {
         debugPrint('Falha ao inicializar Supabase no isolate: $e');
@@ -208,13 +185,12 @@ class _DeliveryTaskHandler extends TaskHandler {
   Future<void> onRepeatEvent(DateTime timestamp) async {
     _count++;
     try {
-      final String? uuidReal = await FlutterForegroundTask.getData<String>(key: 'driverId');
+      final String? uuidReal = await FlutterForegroundTask.getData<String>(
+        key: 'driverId',
+      );
       if (uuidReal == null || uuidReal == '0' || uuidReal.isEmpty) {
-        print('DEBUG: Aguardando ID real do storage...');
         return;
       }
-
-      debugPrint('└─ Driver ID: $uuidReal');
 
       // Evitar reentrância: se já estiver em polling, pular esta execução
       if (_isPolling) {
@@ -240,7 +216,10 @@ class _DeliveryTaskHandler extends TaskHandler {
         });
         try {
           // Também salvar em storage para que a UI possa recuperar caso a ponte esteja interrompida
-          await FlutterForegroundTask.saveData(key: 'entregas', value: jsonEncode(lista));
+          await FlutterForegroundTask.saveData(
+            key: 'entregas',
+            value: jsonEncode(lista),
+          );
         } catch (e) {
           debugPrint('Erro ao salvar entregas no foreground storage: $e');
         }
@@ -575,7 +554,11 @@ class RotaMotorista extends StatefulWidget {
 
 class RotaMotoristaState extends State<RotaMotorista>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  // Key global para o Scaffold para reduzir risco de perda de contexto
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   String? _avatarPath;
+  // Número do gestor, default para compatibilidade local — atualizado dinamicamente em carregarDados().
+  String numeroGestor = '5548996525008';
   // ID do motorista carregado nas prefs — inicializado como 0 por segurança
   int _driverId = 0;
   // ID do motorista vindo do Supabase (UUID string). Inicializa como '0' até
@@ -630,25 +613,28 @@ class RotaMotoristaState extends State<RotaMotorista>
 
       _positionSubscription =
           Geolocator.getPositionStream(locationSettings: settings).listen(
-        (Position pos) async {
-          try {
-            final motoristaId = _motoristaId ?? '0';
-            // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
-            if (motoristaId == '0' || motoristaId.isEmpty) return;
+            (Position pos) async {
+              try {
+                final motoristaId = _motoristaId ?? '0';
+                // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
+                if (motoristaId == '0' || motoristaId.isEmpty) return;
 
-            await Supabase.instance.client.from('motoristas').update({
-              'lat': pos.latitude,
-              'lng': pos.longitude,
-              'ultima_atualizacao': DateTime.now().toIso8601String(),
-            }).eq('id', motoristaId);
-          } catch (e) {
-            debugPrint('Erro ao atualizar localização no Supabase: $e');
-          }
-        },
-        onError: (err) {
-          debugPrint('Erro stream geolocalização: $err');
-        },
-      );
+                await Supabase.instance.client
+                    .from('motoristas')
+                    .update({
+                      'lat': pos.latitude,
+                      'lng': pos.longitude,
+                      'ultima_atualizacao': DateTime.now().toIso8601String(),
+                    })
+                    .eq('id', motoristaId);
+              } catch (e) {
+                debugPrint('Erro ao atualizar localização no Supabase: $e');
+              }
+            },
+            onError: (err) {
+              debugPrint('Erro stream geolocalização: $err');
+            },
+          );
     } catch (e) {
       debugPrint('Erro ao iniciar rastreamento: $e');
     }
@@ -679,11 +665,14 @@ class RotaMotoristaState extends State<RotaMotorista>
         attempts++;
         try {
           final supaId = Supabase.instance.client.auth.currentUser?.id;
-          debugPrint('DEBUG: Supabase currentSession: ${Supabase.instance.client.auth.currentSession}');
+          debugPrint(
+            'DEBUG: Supabase currentSession: ${Supabase.instance.client.auth.currentSession}',
+          );
           String found = supaId ?? '';
           if (found.isEmpty) {
             final prefs = await SharedPreferences.getInstance();
-            found = prefs.getString('supabase_user_id') ??
+            found =
+                prefs.getString('supabase_user_id') ??
                 prefs.getString('user_id') ??
                 prefs.getString('motorista_uuid') ??
                 prefs.getString('driver_uuid') ??
@@ -718,14 +707,18 @@ class RotaMotoristaState extends State<RotaMotorista>
                         .select('id')
                         .eq('motorista_id', _driverId.toString())
                         .limit(1);
-                    debugPrint('DEBUG: Query motoristas by motorista_id raw: $r2');
+                    debugPrint(
+                      'DEBUG: Query motoristas by motorista_id raw: $r2',
+                    );
                     if (r2 is List) {
                       q = r2;
                     } else if (r2 is Map && r2['data'] != null) {
                       q = r2['data'] as List<dynamic>;
                     }
                   } catch (err2) {
-                    debugPrint('DEBUG: Erro query motoristas (motorista_id): $err2');
+                    debugPrint(
+                      'DEBUG: Erro query motoristas (motorista_id): $err2',
+                    );
                   }
                 }
                 if ((q as List).isNotEmpty) {
@@ -734,7 +727,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                   if (candidate.isNotEmpty) found = candidate;
                 }
               } catch (e) {
-                debugPrint('DEBUG: Erro buscando UUID na tabela motoristas: $e');
+                debugPrint(
+                  'DEBUG: Erro buscando UUID na tabela motoristas: $e',
+                );
               }
             }
           }
@@ -742,7 +737,9 @@ class RotaMotoristaState extends State<RotaMotorista>
             _motoristaId = found;
             try {
               LocationService().iniciarRastreio(found);
-              debugPrint('LocationService: iniciado após $attempts tentativas (UUID: $found)');
+              debugPrint(
+                'LocationService: iniciado após $attempts tentativas (UUID: $found)',
+              );
             } catch (e) {
               debugPrint('Erro ao iniciar LocationService após retry: $e');
             }
@@ -752,7 +749,9 @@ class RotaMotoristaState extends State<RotaMotorista>
           debugPrint('Erro no loop de tentativa do UUID: $e');
         }
       }
-      debugPrint('ID Supabase não encontrado após $maxAttempts tentativas; rastreio não iniciado.');
+      debugPrint(
+        'ID Supabase não encontrado após $maxAttempts tentativas; rastreio não iniciado.',
+      );
     }();
   }
 
@@ -775,7 +774,9 @@ class RotaMotoristaState extends State<RotaMotorista>
           recoveredFromCache = true;
         }
       }
-      debugPrint('🔍 DEBUG: Buscando no banco o UUID para o e-mail: ${email ?? 'NULL'}${recoveredFromCache ? ' (recuperado do cache)' : ''}');
+      debugPrint(
+        '🔍 DEBUG: Buscando no banco o UUID para o e-mail: ${email ?? 'NULL'}${recoveredFromCache ? ' (recuperado do cache)' : ''}',
+      );
       // Tentativa 1: currentUser
       final supaId = Supabase.instance.client.auth.currentUser?.id;
       if (supaId != null && supaId.isNotEmpty && supaId != '0') {
@@ -806,10 +807,13 @@ class RotaMotoristaState extends State<RotaMotorista>
                 : int.tryParse((first['codigo_v10'] ?? '').toString());
             final nomeBanco = (first['nome'] ?? '').toString();
             debugPrint('🔍 Logado como: $nomeBanco');
-            if (candidate.isNotEmpty) return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
+            if (candidate.isNotEmpty)
+              return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
           }
         } else {
-          debugPrint('DEBUG: email do Supabase nulo ou vazio; pulando busca por email.');
+          debugPrint(
+            'DEBUG: email do Supabase nulo ou vazio; pulando busca por email.',
+          );
         }
       } catch (e) {
         debugPrint('DEBUG: busca por email falhou: $e');
@@ -862,7 +866,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                 : int.tryParse((record['codigo_v10'] ?? '').toString());
             final nomeBanco = (record['nome'] ?? '').toString();
             debugPrint('🔍 Logado como: $nomeBanco');
-            if (candidate.isNotEmpty) return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
+            if (candidate.isNotEmpty)
+              return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
           }
         }
       } catch (e) {
@@ -879,7 +884,8 @@ class RotaMotoristaState extends State<RotaMotorista>
       final picker = ImagePicker();
       final XFile? img = await picker.pickImage(
         source: source,
-        imageQuality: 80,
+        imageQuality: 25,
+        maxWidth: 800,
       );
       if (img != null) {
         setState(() => _avatarPath = img.path);
@@ -894,7 +900,6 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Recebe dados vindos do foreground task (ou do fallback de storage)
   void _onReceiveTaskData(Object data) {
     try {
-      debugPrint('📺 UI RECEBEU DADOS: $data');
       if (data is Map && data['entregas'] != null) {
         final dynamic raw = data['entregas'];
         List<dynamic> parsed = [];
@@ -905,7 +910,9 @@ class RotaMotoristaState extends State<RotaMotorista>
         }
         // Atualizar lista local sem forçar conversões de tipos
         setState(() {
-          entregas = List<dynamic>.from(parsed.map((e) => e as Map<String, dynamic>));
+          entregas = List<dynamic>.from(
+            parsed.map((e) => e as Map<String, dynamic>),
+          );
         });
         _notifyEntregasDebounced(entregas);
       }
@@ -1165,7 +1172,8 @@ class RotaMotoristaState extends State<RotaMotorista>
             _motoristaId = supaId;
           } else {
             // Fallback: tentar buscar de várias keys nas SharedPreferences
-            final fromPrefs = prefs.getString('supabase_user_id') ??
+            final fromPrefs =
+                prefs.getString('supabase_user_id') ??
                 prefs.getString('user_id') ??
                 prefs.getString('motorista_uuid') ??
                 prefs.getString('driver_uuid') ??
@@ -1176,7 +1184,8 @@ class RotaMotoristaState extends State<RotaMotorista>
           }
         } catch (e) {
           debugPrint('DEBUG: Erro obtendo UUID Supabase: $e');
-          _motoristaId = prefs.getString('supabase_user_id') ??
+          _motoristaId =
+              prefs.getString('supabase_user_id') ??
               prefs.getString('user_id') ??
               prefs.getInt('driver_id')?.toString() ??
               '0';
@@ -1188,18 +1197,21 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
       // Buscar identidade real em cascata e iniciar LocationService somente se houver ID válido
       try {
-        final Map<String, dynamic>? foundMap =
-            await buscarIdentidadeReal();
+        final Map<String, dynamic>? foundMap = await buscarIdentidadeReal();
         if (foundMap != null && (foundMap['id'] ?? '').toString().isNotEmpty) {
           final String foundId = (foundMap['id'] ?? '').toString();
           _motoristaId = foundId;
           _codigoV10 = foundMap['codigo_v10'] is int
               ? (foundMap['codigo_v10'] as int)
               : int.tryParse((foundMap['codigo_v10'] ?? '').toString());
-          debugPrint('🚀 Motorista identificado! UUID: $_motoristaId | Código Curto: ${_codigoV10 ?? 'N/A'}');
+          debugPrint(
+            '🚀 Motorista identificado! UUID: $_motoristaId | Código Curto: ${_codigoV10 ?? 'N/A'}',
+          );
           try {
             LocationService().iniciarRastreio(_motoristaId);
-            debugPrint('✅ GPS: Rastreio iniciado para o motorista $_motoristaId');
+            debugPrint(
+              '✅ GPS: Rastreio iniciado para o motorista $_motoristaId',
+            );
           } catch (e) {
             debugPrint('Erro iniciando LocationService: $e');
           }
@@ -1222,7 +1234,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                 await prefs.setString('fcm_token', fcmToken);
               } catch (_) {}
             } else {
-              debugPrint('FCM token ausente durante auto-login para $_motoristaId');
+              debugPrint(
+                'FCM token ausente durante auto-login para $_motoristaId',
+              );
             }
           } catch (e) {
             debugPrint('Erro ao obter/registrar FCM no auto-login: $e');
@@ -1232,7 +1246,9 @@ class RotaMotoristaState extends State<RotaMotorista>
         debugPrint('Erro ao buscar identidade real: $e');
       }
 
-      debugPrint('🚀 App iniciado - Driver ID: $_driverId, Supabase user: $_motoristaId');
+      debugPrint(
+        '🚀 App iniciado - Driver ID: $_driverId, Supabase user: $_motoristaId',
+      );
       // Tenta iniciar o serviço de localização (se implementado no projeto)
       try {
         _tryStartLocationServiceFor(_motoristaId);
@@ -1430,9 +1446,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       try {
         if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
           await FlutterForegroundTask.saveData(key: 'driverId', value: _motoristaId);
-          debugPrint('📥 driverId salvo no foreground-task storage: $_motoristaId');
-        } else {
-          debugPrint('⚠️ driverId inválido; não salvo no foreground-task storage');
+          debugPrint('driverId salvo no foreground storage');
         }
       } catch (e) {
         debugPrint('Erro ao salvar driverId no foreground storage: $e');
@@ -1489,7 +1503,9 @@ class RotaMotoristaState extends State<RotaMotorista>
       ) async {
         try {
           // Ler driverId diretamente do storage do foreground task (fonte da verdade)
-          final String? storedId = await FlutterForegroundTask.getData<String>(key: 'driverId');
+          final String? storedId = await FlutterForegroundTask.getData<String>(
+            key: 'driverId',
+          );
           // silenciosamente não faz nada se não houver id válido
           if (storedId == null || storedId == '0' || storedId.isEmpty) return;
 
@@ -1610,11 +1626,12 @@ class RotaMotoristaState extends State<RotaMotorista>
               .update({'fcm_token': token})
               .eq('id', _driverId);
         }
-        // log claro para auditoria
-        print('🚀 Token FCM salvo: $token');
+        // log claro para auditoria (não printar token)
+        debugPrint('Token FCM salvo');
         try {
-          await SharedPreferences.getInstance()
-              .then((prefs) => prefs.setString('fcm_token', token));
+          await SharedPreferences.getInstance().then(
+            (prefs) => prefs.setString('fcm_token', token),
+          );
         } catch (_) {}
       }
     } catch (e) {
@@ -1747,60 +1764,194 @@ class RotaMotoristaState extends State<RotaMotorista>
         '*Motorista:* $nomeMotorista\n'
         '*Hora:* $hora';
 
-    // Parar qualquer som de fundo antes de abrir app externo/compartilhar
+    // Parar qualquer som de fundo antes de processar
     try {
       await _pararAudio();
     } catch (e) {
       // ignorar
     }
 
-    // Se existe foto, enviar via share_plus para permitir anexar arquivo (WhatsApp aceita via share)
+    // 1) SALVAR no Supabase primeiro (ordem de segurança requerida)
     try {
-      if (hasPhoto) {
-        final f = File(imagemFalha!);
-        if (await f.exists()) {
-          // Anexar arquivo + texto usando share_plus
-          // ignore: deprecated_member_use
-          await Share.shareXFiles([XFile(f.path)], text: report);
-        } else {
-          // fallback para abrir apenas mensagem por link
-          await _enviarWhatsApp(report, phone: numeroGestor);
-        }
-      } else {
-        // sem foto: abrir WhatsApp com texto
-        await _enviarWhatsApp(report, phone: numeroGestor);
-      }
+      await Supabase.instance.client
+          .from('entregas')
+          .update({
+            'status': 'falha',
+            'obs': detalhesObs,
+            'data_conclusao': DateTime.now().toIso8601String(),
+          })
+          .eq('id', cardId);
     } catch (e) {
-      // ignorar falha no compartilhamento
+      debugPrint('Erro ao salvar falha no Supabase: $e');
     }
 
-    setState(() {
-      imagemFalha = null;
-      motivoFalhaSelecionada = null;
+    // 2) Atualizar UI local e persistir estado
+    // Nota: não atualizar a UI imediatamente aqui (evitar setState durante
+    // abertura de apps externos). A atualização será feita quando o motorista
+    // retornar ao app via `_postFalhaCleanup`.
+    try {
+      await CacheService().saveEntregas(
+        List<Map<String, dynamic>>.from(
+          entregas.map((e) => Map<String, dynamic>.from(e as Map)),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Erro salvando cache antes do compartilhamento: $e');
+    }
+
+    // 4) Agora executar o envio/desacoplado (compartilhar arquivo ou Whatsapp)
+    bool sharedSuccess = false;
+    try {
+      if (hasPhoto && imagemFalha != null) {
+        final f = File(imagemFalha!);
+        if (await f.exists()) {
+          sharedSuccess = await finalizarEnvio(f, report);
+        } else {
+          sharedSuccess = false;
+          try {
+            await _enviarWhatsApp(report, phone: numeroGestor);
+            sharedSuccess = true;
+          } catch (_) {}
+        }
+      } else {
+        try {
+          await _enviarWhatsApp(report, phone: numeroGestor);
+          sharedSuccess = true;
+        } catch (_) {
+          sharedSuccess = false;
+        }
+      }
+    } catch (e) {
+      debugPrint('Erro no compartilhamento: $e');
+      sharedSuccess = false;
+    }
+
+    // Limpar preview da foto APÓS compartilhamento bem-sucedido
+    // Nota: não chamar setState aqui — a limpeza será feita por
+    // `_postFalhaCleanup` quando o usuário retornar ao app.
+
+    // Forçar redraw após retorno de app externo (ex: WhatsApp)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        setState(() {});
+      } catch (_) {}
     });
 
-    // Remover localmente da lista de entregas para atualizar UI imediatamente
-    // mover setState antes do fechamento do modal e comparar IDs como string
-    if (mounted) {
+    // Se não há mais entregas, tocar som de rota concluída (mantido em código ativo quando necessário)
+  }
+
+  // Limpeza local após o motorista retornar ao app: atualiza UI e cache.
+  Future<void> _postFalhaCleanup(String cardId) async {
+    if (!mounted) return;
+    try {
       setState(() {
         _entregas.removeWhere(
           (item) => item['id'].toString() == cardId.toString(),
         );
-        // Recalcula os contadores utilizados pelos mini-cards do cabeçalho
         _atualizarContadores();
+        imagemFalha = null;
+        motivoFalhaSelecionada = null;
       });
-      // Notifica o stream para atualizar widgets que usam StreamBuilder
-      _notifyEntregasDebounced(entregas);
-      Navigator.of(context).pop();
+    } catch (e) {
+      debugPrint('Erro ao aplicar cleanup de falha na UI: $e');
     }
+    try {
+      await CacheService().saveEntregas(
+        List<Map<String, dynamic>>.from(
+          entregas.map((e) => Map<String, dynamic>.from(e as Map)),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Erro salvando cache após cleanup: $e');
+    }
+    try {
+      _notifyEntregasDebounced(entregas);
+    } catch (_) {}
+  }
 
-    // Se não há mais entregas, tocar som de rota concluída
-    if (entregas.isEmpty) {
-      try {
-        await _tocarSomRotaConcluida();
-      } catch (e) {
-        // ignorar
+  // Centraliza reset das fotos usadas pelos modais (sucesso / falha)
+  void _resetModalPhotos() {
+    try {
+      if (!mounted) return;
+      setState(() {
+        fotoEvidencia = null;
+        imagemFalha = null;
+        motivoFalhaSelecionada = null;
+      });
+    } catch (_) {}
+  }
+
+  // Função desacoplada que executa o compartilhamento de arquivo (retorna true se sucesso)
+  Future<bool> finalizarEnvio(File? foto, String mensagem) async {
+    try {
+      if (foto != null) {
+        final exists = await foto.exists().catchError((_) => false);
+        final String p = foto.path;
+        final bool isSuccessPhoto =
+            fotoEvidencia != null && fotoEvidencia!.path == p;
+        final bool isFailPhoto = imagemFalha != null && imagemFalha == p;
+        if (exists && (isSuccessPhoto || isFailPhoto)) {
+          try {
+            // ignore: deprecated_member_use
+            await Share.shareXFiles([XFile(p)], text: mensagem);
+            try {
+              _resetModalPhotos();
+            } catch (_) {}
+            return true;
+          } catch (shareErr) {
+            debugPrint('Erro ao usar Share.shareXFiles: $shareErr');
+            // continuar para fallback
+          }
+        } else {
+          debugPrint(
+            'Arquivo de foto não pertence ao modal atual ou não existe: $p',
+          );
+        }
       }
+
+      // Tentar abrir WhatsApp nativo (sem foto ou se share falhar)
+      try {
+        final String textEncoded = Uri.encodeComponent(mensagem);
+        final String phone = (numeroGestor ?? '').replaceAll('+', '');
+        final Uri uriWhatsApp = Uri.parse(
+          'whatsapp://send?phone=$phone&text=$textEncoded',
+        );
+        if (await canLaunchUrl(uriWhatsApp)) {
+          await launchUrl(uriWhatsApp, mode: LaunchMode.externalApplication);
+          try {
+            _resetModalPhotos();
+          } catch (_) {}
+          return true;
+        }
+      } catch (waErr) {
+        debugPrint('Erro ao tentar abrir WhatsApp nativo: $waErr');
+      }
+
+      // Fallback para _enviarWhatsApp (usa api.whatsapp.com / https)
+      try {
+        await _enviarWhatsApp(mensagem, phone: numeroGestor);
+        try {
+          _resetModalPhotos();
+        } catch (_) {}
+        return true;
+      } catch (fbErr) {
+        debugPrint('Erro no fallback _enviarWhatsApp: $fbErr');
+        // Último recurso: compartilhar apenas texto
+        try {
+          await Share.share(mensagem);
+          try {
+            _resetModalPhotos();
+          } catch (_) {}
+          return true;
+        } catch (finalErr) {
+          debugPrint('Erro ao compartilhar texto: $finalErr');
+          return false;
+        }
+      }
+    } catch (e) {
+      debugPrint('finalizarEnvio erro inesperado: $e');
+      return false;
     }
   }
 
@@ -1810,9 +1961,346 @@ class RotaMotoristaState extends State<RotaMotorista>
     setState(() => _selectedMapName = mapName);
   }
 
+  // Modal de FALHA (structuralmente espelhado ao modal de sucesso, tema vermelho)
+  void _buildFailModal(BuildContext ctx, Map<String, dynamic> item) {
+    final String nomeCliente = item['cliente'] ?? '';
+    _resetModalPhotos();
+    String? motivoSelecionadoLocal;
+    String obsTexto = '';
+    XFile? pickedImageLocal;
+    final TextEditingController obsController = TextEditingController();
+
+    showDialog(
+      context: ctx,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (dialogCtx2, setStateDialog) {
+            final List<String> motivos = [
+              'Cliente Ausente',
+              'Endereço não localizado',
+              'Local Fechado',
+              'Recusou Entrega',
+              'Mudou-se',
+              'Área de Risco',
+              'Veículo Quebrado',
+              'Outro Motivo',
+            ];
+
+            final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
+            final Color textColor = modoDia ? Colors.black87 : Colors.white;
+            final Color secondary = modoDia ? Colors.black54 : Colors.white70;
+            final Color fillColor = modoDia
+                ? Colors.grey.shade200
+                : Colors.white10;
+
+            final bool hasPhoto =
+                (imagemFalha != null) || (pickedImageLocal != null);
+            // Foto agora é opcional: habilitar envio assim que um motivo for selecionado
+            final bool canSend =
+                (motivoSelecionadoLocal != null) ||
+                (motivoFalhaSelecionada != null);
+
+            return AlertDialog(
+              backgroundColor: bg,
+              title: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      'FALHA',
+                      style: TextStyle(
+                        color: textColor,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.left,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.camera_alt, color: textColor),
+                    onPressed: () async {
+                      final XFile? photo = await _tirarFoto();
+                      if (photo != null) {
+                        setState(() {
+                          imagemFalha = photo.path;
+                          caminhoFotoSession = photo.path;
+                        });
+                        setStateDialog(() => pickedImageLocal = photo);
+                      }
+                    },
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: SizedBox(
+                  width: MediaQuery.of(context).size.width * 0.9,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Preview da foto (120x120) centralizado
+                      Center(
+                        child: Container(
+                          width: 120,
+                          height: 120,
+                          decoration: BoxDecoration(
+                            color: fillColor,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: textColor.withOpacity(0.2),
+                            ),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: hasPhoto
+                                ? Builder(
+                                    builder: (_) {
+                                      final String path =
+                                          pickedImageLocal?.path ??
+                                          imagemFalha ??
+                                          '';
+                                      if (path.isNotEmpty) {
+                                        try {
+                                          return Image.file(
+                                            File(path),
+                                            fit: BoxFit.cover,
+                                            width: 120,
+                                            height: 120,
+                                          );
+                                        } catch (_) {
+                                          // Em caso de falha ao carregar imagem, mostrar ícone
+                                          return Center(
+                                            child: Icon(
+                                              Icons.photo,
+                                              color: secondary,
+                                              size: 36,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                      return Center(
+                                        child: Icon(
+                                          Icons.photo,
+                                          color: secondary,
+                                          size: 36,
+                                        ),
+                                      );
+                                    },
+                                  )
+                                : Center(
+                                    child: Icon(
+                                      Icons.photo,
+                                      color: secondary,
+                                      size: 36,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ),
+
+                      SizedBox(height: 12),
+
+                      GridView.count(
+                        crossAxisCount: 2,
+                        mainAxisSpacing: 10,
+                        crossAxisSpacing: 10,
+                        childAspectRatio: 2.1,
+                        shrinkWrap: true,
+                        physics: NeverScrollableScrollPhysics(),
+                        children: motivos.map((m) {
+                          final bool isSel =
+                              motivoSelecionadoLocal == m ||
+                              motivoFalhaSelecionada == m;
+                          return ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isSel
+                                  ? Colors.red
+                                  : Colors.grey[800],
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(
+                                vertical: 10,
+                                horizontal: 6,
+                              ),
+                            ),
+                            onPressed: () {
+                              setStateDialog(() => motivoSelecionadoLocal = m);
+                              setState(() => motivoFalhaSelecionada = m);
+                            },
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 4),
+                              child: Text(
+                                m,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontSize: 12, height: 1.1),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+
+                      SizedBox(height: 12),
+
+                      TextField(
+                        controller: obsController,
+                        decoration: InputDecoration(
+                          labelText: 'Observações',
+                          filled: true,
+                          fillColor: fillColor,
+                          border: OutlineInputBorder(),
+                          labelStyle: TextStyle(color: secondary),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                        ),
+                        style: TextStyle(color: textColor),
+                        onChanged: (v) => setStateDialog(() => obsTexto = v),
+                        maxLines: 2,
+                      ),
+
+                      SizedBox(height: 12),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: canSend
+                            ? Colors.red
+                            : Colors.grey[700],
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(28),
+                        ),
+                      ),
+                      onPressed: canSend
+                          ? () async {
+                              final idItem = item['id'];
+                              final cliente = item['cliente'] ?? '';
+                              final endereco = item['endereco'] ?? '';
+                              final motivoFinal =
+                                  motivoSelecionadoLocal ??
+                                  motivoFalhaSelecionada ??
+                                  '';
+                              final detalhes = obsTexto.trim();
+
+                              final payload = {
+                                'status': 'falha',
+                                'tipo_recebedor': motivoFinal,
+                                'obs': detalhes,
+                                'data_conclusao': DateTime.now()
+                                    .toIso8601String(),
+                              };
+                              try {
+                                final dynamic res = await Supabase
+                                    .instance
+                                    .client
+                                    .from('entregas')
+                                    .update(payload)
+                                    .eq('id', idItem)
+                                    .select();
+                                debugPrint('Update falha result: $res');
+                              } catch (e) {
+                                debugPrint(
+                                  'Erro ao gravar falha no Supabase: $e',
+                                );
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Erro ao salvar falha: ${e.toString().split('\n').first}',
+                                      ),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              }
+
+                              // Segurança Máxima: primeiro disparar WhatsApp, manter modal aberto
+                              final hora = DateFormat(
+                                'HH:mm',
+                              ).format(DateTime.now());
+                              final report =
+                                  '*Status:* falha\n'
+                                  '*Motivo:* $motivoFinal\n'
+                                  '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
+                                  '*Cliente:* $cliente\n'
+                                  '*Endereço:* $endereco\n'
+                                  '*Motorista:* $nomeMotorista\n'
+                                  '*Hora:* $hora';
+
+                              try {
+                                if (imagemFalha != null) {
+                                  try {
+                                    final f = File(imagemFalha!);
+                                    if (await f.exists()) {
+                                      await finalizarEnvio(f, report);
+                                    } else {
+                                      await _enviarWhatsApp(
+                                        report,
+                                        phone: numeroGestor,
+                                      );
+                                      try { _resetModalPhotos(); } catch (_) {}
+                                    }
+                                  } catch (e) {
+                                    debugPrint(
+                                      'Erro ao anexar foto da falha: $e',
+                                    );
+                                    await _enviarWhatsApp(
+                                      report,
+                                      phone: numeroGestor,
+                                    );
+                                    try { _resetModalPhotos(); } catch (_) {}
+                                  }
+                                } else {
+                                  await _enviarWhatsApp(
+                                    report,
+                                    phone: numeroGestor,
+                                  );
+                                  try { _resetModalPhotos(); } catch (_) {}
+                                }
+                              } catch (e) {
+                                debugPrint('Erro ao disparar WhatsApp: $e');
+                              }
+
+                              // Delay de saída para dar tempo ao sistema abrir o app externo
+                              await Future.delayed(const Duration(seconds: 1));
+                              if (!mounted) return;
+                              try {
+                                if (Navigator.of(context).canPop())
+                                  Navigator.of(context).pop();
+                              } catch (e) {
+                                debugPrint(
+                                  'Erro ao fechar modal após envio: $e',
+                                );
+                              }
+
+                              // Atualizar UI local APÓS o retorno do motorista
+                              await _postFalhaCleanup(idItem.toString());
+                            }
+                          : null,
+                      child: Text('ENVIAR PARA GESTOR'),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   // Única função de modal: abre o bottom sheet de sucesso
   void _buildSuccessModal(BuildContext ctx, Map<String, dynamic> item) {
     final String nomeCliente = item['cliente'] ?? '';
+    _resetModalPhotos();
     String? opcaoSelecionada;
     String obsTexto = '';
     XFile? pickedImageLocal;
@@ -2095,17 +2583,41 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     if (res is List && res.isNotEmpty) {
                                       // após persistir com sucesso, enviar foto/mensagem
                                       try {
-                                        if (files.isNotEmpty) {
-                                          // ignore: deprecated_member_use
-                                          await Share.shareXFiles(
-                                            files,
-                                            text: mensagem,
-                                          );
-                                        } else {
+                                        // Envio condicional explícito: OK envia apenas sua foto (`fotoEvidencia`)
+                                        if (fotoEvidencia == null) {
+                                          // Sem foto: enviar apenas texto via WhatsApp
                                           await _enviarWhatsApp(
                                             mensagem,
                                             phone: numeroGestor,
                                           );
+                                          try {
+                                            _resetModalPhotos();
+                                          } catch (_) {}
+                                        } else {
+                                          // Com foto: enviar mídia + texto (usar apenas `fotoEvidencia`/picked local)
+                                          try {
+                                            final String? pathToSend =
+                                                fotoEvidencia?.path ??
+                                                    pickedImageLocal?.path ??
+                                                    caminhoFotoSession;
+                                            if (pathToSend != null) {
+                                              // ignore: deprecated_member_use
+                                              await Share.shareXFiles([
+                                                XFile(pathToSend)
+                                              ],
+                                                  text: mensagem);
+                                            } else {
+                                              // fallback para texto se arquivo não existir
+                                              await _enviarWhatsApp(
+                                                mensagem,
+                                                phone: numeroGestor,
+                                              );
+                                            }
+                                          } finally {
+                                            try {
+                                              _resetModalPhotos();
+                                            } catch (_) {}
+                                          }
                                         }
                                       } catch (e) {
                                         debugPrint(
@@ -2364,30 +2876,45 @@ class RotaMotoristaState extends State<RotaMotorista>
       if (storedId != null && storedId.isNotEmpty && storedId != '0') {
         driverIdForQuery = storedId;
       } else {
-        if (storedId == null) {
-          debugPrint('⚠️ carregarDados(): leitura do storage retornou null para driverId');
-        } else {
-          debugPrint('⚠️ carregarDados(): driverId salvo inválido ("$storedId")');
-        }
-        // fallback para `_driverId` numérico quando possível
-        if (_driverId != 0) {
-          driverIdForQuery = _driverId.toString();
-        } else {
-          debugPrint('⚠️  carregarDados() chamado sem driver_id válido');
-          _setEntregas([]);
-          _atualizarContadores();
-          return;
-        }
+        debugPrint(
+          '⚠️ carregarDados(): driverId salvo inválido ou ausente ("$storedId"). Abortando.',
+        );
+        _setEntregas([]);
+        _atualizarContadores();
+        return;
       }
 
       debugPrint('📥 Buscando dados para motorista $driverIdForQuery...');
 
+      // Ler número do gestor dinamicamente da tabela `configuracoes` (chave 'gestor_phone')
+      try {
+        final dynamic configRes = await Supabase.instance.client
+            .from('configuracoes')
+            .select('valor')
+            .eq('chave', 'gestor_phone')
+            .single();
+        String candidate = '';
+        if (configRes != null) {
+          if (configRes is Map && configRes['valor'] != null) {
+            candidate = configRes['valor'].toString();
+          } else if (configRes is String) {
+            candidate = configRes;
+          }
+        }
+        if (candidate.isNotEmpty) {
+          if (mounted) setState(() => numeroGestor = candidate);
+        }
+      } catch (e) {
+        debugPrint('Erro ao ler config gestor: $e');
+      }
+      debugPrint('📞 Gestor atual: $numeroGestor');
+
       // Fazer query ordenando por `id` desc para trazer os pedidos mais recentes primeiro
       dynamic response = await r.retry(() async {
         return await Supabase.instance.client
-          .from('entregas')
-          .select('*')
-          .eq('motorista_id', driverIdForQuery)
+            .from('entregas')
+            .select('*')
+            .eq('motorista_id', driverIdForQuery)
             .or('status.eq.pendente,status.eq.em_rota')
             .order('id', ascending: false);
       }, retryIf: (e) => e is SocketException || e is TimeoutException);
@@ -2473,7 +3000,9 @@ class RotaMotoristaState extends State<RotaMotorista>
         _atualizarContadores();
         debugPrint('✅ Dados carregados: ${lista.length} registros');
         // Log produtivo de sucesso do polling
-        debugPrint('✅ Polling: [${lista.length}] entregas sincronizadas para o motorista [$driverIdForQuery]');
+        debugPrint(
+          '✅ Polling: [${lista.length}] entregas sincronizadas para o motorista [$driverIdForQuery]',
+        );
         setState(() {
           modoOffline = false;
           // Se ainda não inicializamos o contador antigo, setar para o tamanho atual
@@ -2664,7 +3193,8 @@ class RotaMotoristaState extends State<RotaMotorista>
       final picker = ImagePicker();
       final XFile? photo = await picker.pickImage(
         source: ImageSource.camera,
-        imageQuality: 70,
+        imageQuality: 25,
+        maxWidth: 800,
       );
       return photo;
     } catch (_) {
@@ -2675,6 +3205,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: Colors.white,
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(
@@ -3166,35 +3697,59 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     // tentar marcar motorista como offline no Supabase antes de limpar prefs
                                     try {
                                       // Preferir usar email salvo para localizar o motorista
-                                      final savedEmail = prefs.getString('email_salvo') ??
-                                          Supabase.instance.client.auth.currentUser?.email;
-                                      if (savedEmail != null && savedEmail.isNotEmpty) {
+                                      final savedEmail =
+                                          prefs.getString('email_salvo') ??
+                                          Supabase
+                                              .instance
+                                              .client
+                                              .auth
+                                              .currentUser
+                                              ?.email;
+                                      if (savedEmail != null &&
+                                          savedEmail.isNotEmpty) {
                                         try {
-                                          final client = Supabase.instance.client;
-                                          await client.from('motoristas').update({
-                                            'status': 'offline',
-                                            'esta_online': false,
-                                            'lat': null,
-                                            'lng': null,
-                                          }).ilike('email', savedEmail);
+                                          final client =
+                                              Supabase.instance.client;
+                                          await client
+                                              .from('motoristas')
+                                              .update({
+                                                'status': 'offline',
+                                                'esta_online': false,
+                                                'lat': null,
+                                                'lng': null,
+                                              })
+                                              .ilike('email', savedEmail);
                                         } catch (e) {
-                                          debugPrint('ERRO LOGOUT: falha ao atualizar status offline por email: $e');
+                                          debugPrint(
+                                            'ERRO LOGOUT: falha ao atualizar status offline por email: $e',
+                                          );
                                         }
                                       } else {
                                         // Fallback para telefone como antes
-                                        final phone = prefs.getString('driver_phone') ?? '';
-                                        final tel = phone.replaceAll(RegExp(r'\D'), '');
+                                        final phone =
+                                            prefs.getString('driver_phone') ??
+                                            '';
+                                        final tel = phone.replaceAll(
+                                          RegExp(r'\D'),
+                                          '',
+                                        );
                                         if (tel.isNotEmpty) {
                                           try {
-                                            final client = Supabase.instance.client;
-                                            await client.from('motoristas').update({
-                                              'status': 'offline',
-                                              'esta_online': false,
-                                              'lat': null,
-                                              'lng': null,
-                                            }).eq('telefone', tel);
+                                            final client =
+                                                Supabase.instance.client;
+                                            await client
+                                                .from('motoristas')
+                                                .update({
+                                                  'status': 'offline',
+                                                  'esta_online': false,
+                                                  'lat': null,
+                                                  'lng': null,
+                                                })
+                                                .eq('telefone', tel);
                                           } catch (e) {
-                                            debugPrint('ERRO LOGOUT: falha ao atualizar status offline por telefone: $e');
+                                            debugPrint(
+                                              'ERRO LOGOUT: falha ao atualizar status offline por telefone: $e',
+                                            );
                                           }
                                         }
                                       }
@@ -3563,6 +4118,135 @@ class RotaMotoristaState extends State<RotaMotorista>
                           ),
                         );
                       },
+                    ),
+
+                    SizedBox(height: 12),
+
+                    // Ações do card: ROTA | FALHA | OK (estilo pill, cada botão expandido)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: 42,
+                            child: ElevatedButton.icon(
+                              icon: Icon(
+                                Icons.map,
+                                color: Colors.white,
+                                size: 16,
+                              ),
+                              label: Text(
+                                'ROTA',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(28),
+                                ),
+                                padding: EdgeInsets.symmetric(horizontal: 8),
+                              ),
+                              onPressed: () {
+                                try {
+                                  final endereco = item['endereco'] ?? '';
+                                  _abrirMapaComPreferencia(endereco);
+                                } catch (e) {
+                                  debugPrint('Erro ao abrir mapa: $e');
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 6),
+                        Expanded(
+                          child: SizedBox(
+                            height: 42,
+                            child: ElevatedButton.icon(
+                              icon: Icon(
+                                Icons.error_outline,
+                                color: Colors.white,
+                                size: 16,
+                              ),
+                              label: Text(
+                                'FALHA',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.redAccent,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(28),
+                                ),
+                                padding: EdgeInsets.symmetric(horizontal: 8),
+                              ),
+                              onPressed: () {
+                                try {
+                                  setState(() {
+                                    imagemFalha = null;
+                                    fotoEvidencia = null;
+                                  });
+                                  _buildFailModal(
+                                    context,
+                                    Map<String, dynamic>.from(item),
+                                  );
+                                } catch (e) {
+                                  debugPrint(
+                                    'Erro ao abrir modal de falha: $e',
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 6),
+                        Expanded(
+                          child: SizedBox(
+                            height: 42,
+                            child: ElevatedButton.icon(
+                              icon: Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: 16,
+                              ),
+                              label: Text(
+                                'OK',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(28),
+                                ),
+                                padding: EdgeInsets.symmetric(horizontal: 8),
+                              ),
+                              onPressed: () {
+                                try {
+                                  setState(() {
+                                    imagemFalha = null;
+                                    fotoEvidencia = null;
+                                  });
+                                  _buildSuccessModal(
+                                    context,
+                                    Map<String, dynamic>.from(item),
+                                  );
+                                } catch (e) {
+                                  debugPrint(
+                                    'Erro ao abrir modal de sucesso: $e',
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
