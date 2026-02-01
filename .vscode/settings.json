@@ -1,3 +1,7 @@
 {
-    "cmake.sourceDirectory": "C:/src/v10_delivery/linux"
+    "cmake.sourceDirectory": "C:/src/v10_delivery/linux",
+    "azure-iot-edge.defaultPlatform": {
+        "platform": "amd64",
+        "alias": null
+    }
 }

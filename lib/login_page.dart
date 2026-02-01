@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 import 'register_page.dart';
 import 'admin_approval_page.dart';
 import 'globals.dart';
@@ -30,8 +31,6 @@ class _LoginPageState extends State<LoginPage> {
   // visibilidade para campos do modal
   bool _obscureNova = true;
   bool _obscureConfirma = true;
-
-  // removed unused wrapper for reset dialog; use `_mostrarModalEsqueciSenha()` directly
 
   Future<void> _login() async {
     setState(() => _loading = true);
@@ -118,8 +117,9 @@ class _LoginPageState extends State<LoginPage> {
           await prefs.remove('email_salvo');
         }
         await prefs.setInt('driver_id', recId);
+        await prefs.setString('driver_id', recId.toString());
         await prefs.setString('driver_name', nome);
-        idLogado = recId;
+        idLogado = recId.toString();
         nomeMotorista = nome;
 
         // Registrar token FCM para este motorista (pede permissão e atualiza tabela)
@@ -143,8 +143,7 @@ class _LoginPageState extends State<LoginPage> {
                     .update({'fcm_token': fcmToken})
                     .eq('email', email);
               }
-              // Log pedido: token salvo
-              print('🚀 Token FCM salvo: $fcmToken');
+              // print removido intencionalmente
             } catch (e) {
               // não bloquear o login por falha ao atualizar o banco
               debugPrint('Erro atualizando fcm_token no login: $e');
@@ -177,7 +176,9 @@ class _LoginPageState extends State<LoginPage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -202,7 +203,9 @@ class _LoginPageState extends State<LoginPage> {
       final prefs = await SharedPreferences.getInstance();
       // inicializar estado do checkbox a partir da preferência salva
       final savedKeep = prefs.getBool('manter_logado') ?? false;
-      if (mounted) setState(() => _keep = savedKeep);
+      if (mounted) {
+        setState(() => _keep = savedKeep);
+      }
       // carregar e-mail salvo se houver
       final savedEmail = prefs.getString('email_salvo');
       if (savedEmail != null && savedEmail.isNotEmpty) {
@@ -213,8 +216,12 @@ class _LoginPageState extends State<LoginPage> {
           });
         }
       }
-      final id = prefs.getInt('driver_id') ?? 0;
-      if (savedKeep && id > 0) {
+      final idStr =
+          prefs.getString('motorista_uuid') ??
+          prefs.getString('driver_id') ??
+          prefs.getInt('driver_id')?.toString() ??
+          '';
+      if (savedKeep && idStr.isNotEmpty && idStr != '0') {
         if (!mounted) return;
         await Navigator.pushReplacement(
           context,
@@ -272,22 +279,72 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                   ),
                   const SizedBox(height: 20),
+                  // Versão discreta no canto inferior direito
+                  Align(
+                    alignment: Alignment.bottomRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8.0, right: 4.0),
+                        child: Text(
+                          'Versão Beta 1.0.2.3',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ),
+                  ),
 
                   // Campos de input
                   TextField(
                     controller: _emailCtl,
+                    style: const TextStyle(color: Colors.black),
                     keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(labelText: 'E-mail'),
+                    decoration: InputDecoration(
+                      labelText: 'E-mail',
+                      floatingLabelBehavior: FloatingLabelBehavior.always,
+                      labelStyle: const TextStyle(color: Colors.black),
+                      filled: true,
+                      fillColor: const Color(0xFFF5F5F5),
+                      hintStyle: const TextStyle(color: Colors.black54),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.black12),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.black12),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.black26),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _passCtl,
+                    style: const TextStyle(color: Colors.black),
                     obscureText: _obscure,
                     decoration: InputDecoration(
                       labelText: 'Senha',
+                      floatingLabelBehavior: FloatingLabelBehavior.always,
+                      labelStyle: const TextStyle(color: Colors.black),
+                      filled: true,
+                      fillColor: const Color(0xFFF5F5F5),
+                      hintStyle: const TextStyle(color: Colors.black54),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.black12),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.black12),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.black26),
+                      ),
                       suffixIcon: IconButton(
                         icon: Icon(
                           _obscure ? Icons.visibility_off : Icons.visibility,
+                          color: Colors.purple[700],
                         ),
                         onPressed: () => setState(() => _obscure = !_obscure),
                       ),
@@ -316,11 +373,25 @@ class _LoginPageState extends State<LoginPage> {
 
                   Align(
                     alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: () => _mostrarModalEsqueciSenha(context),
-                      child: const Text(
-                        'Esqueci minha senha?',
-                        style: TextStyle(color: Color(0xFF6750A4)),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(4),
+                        onTap: () {
+                          debugPrint('CLIQUE DETECTADO NO BOTAO');
+                          try {
+                            // prefazer o e-mail do modal com o e-mail principal
+                            _resetEmailCtl.text = _emailCtl.text;
+                          } catch (_) {}
+                          _mostrarModalEsqueciSenha(context);
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+                          child: Text(
+                            'Esqueci minha senha?',
+                            style: TextStyle(color: Color(0xFF6750A4)),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -430,9 +501,33 @@ class _LoginPageState extends State<LoginPage> {
                         const SizedBox(height: 12),
                         TextField(
                           controller: emailCtl,
+                          style: const TextStyle(color: Colors.black),
                           keyboardType: TextInputType.emailAddress,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             labelText: 'E-mail cadastrado',
+                            floatingLabelBehavior: FloatingLabelBehavior.always,
+                            labelStyle: const TextStyle(color: Colors.black),
+                            filled: true,
+                            fillColor: const Color(0xFFF5F5F5),
+                            hintStyle: const TextStyle(color: Colors.black54),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black12,
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black12,
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black26,
+                              ),
+                            ),
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -443,43 +538,78 @@ class _LoginPageState extends State<LoginPage> {
                             minimumSize: const Size.fromHeight(48),
                           ),
                           onPressed: () async {
-                            final email = emailCtl.text.trim();
-                            if (email.isEmpty) {
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(contextSB).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Preencha o e-mail'),
-                                ),
-                              );
-                              return;
-                            }
-
                             try {
+                              // limpar qualquer SnackBar existente para manter a UI limpa
+                              try {
+                                ScaffoldMessenger.of(contextSB).removeCurrentSnackBar();
+                              } catch (_) {}
+
+                              final email = emailCtl.text.trim();
+                              if (email.isEmpty) {
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(contextSB).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Por favor, digite seu e-mail'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                                return;
+                              }
+
+                              // Buscar telefone e senha na tabela motoristas
                               final dynamic resp = await client
                                   .from('motoristas')
-                                  .select('id')
+                                  .select('telefone,senha')
                                   .eq('email', email)
                                   .maybeSingle();
 
                               if (resp == null) {
+                                if (!mounted) return;
                                 try {
-                                  if (!mounted) return;
-                                  ScaffoldMessenger.of(contextSB).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('E-mail não encontrado'),
-                                    ),
-                                  );
+                                  ScaffoldMessenger.of(contextSB).removeCurrentSnackBar();
                                 } catch (_) {}
+                                ScaffoldMessenger.of(contextSB).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('E-mail não cadastrado! Verifique os dados.'),
+                                    duration: Duration(seconds: 3),
+                                  ),
+                                );
                                 return;
                               }
 
-                              // avançar para etapa 2
+                              final telefone = (resp['telefone'] ?? '').toString();
+                              final senha = (resp['senha'] ?? '').toString();
+
+                              // limpar telefone e prefixar DDI +55
+                              final phoneDigits = telefone.replaceAll(RegExp(r'\D'), '');
+                              final phoneWithDdi = phoneDigits.startsWith('55') ? phoneDigits : '55$phoneDigits';
+
+                              if (!mounted) return;
+                              // abrir WhatsApp imediatamente (externo)
+                              final msg = Uri.encodeComponent('Olá, sua senha V10 é: $senha');
+                              final waUrl = 'https://wa.me/$phoneWithDdi?text=$msg';
+
                               try {
-                                setStateSB(() => step = 2);
-                              } catch (_) {}
-                            } catch (e) {
+                                await launchUrlString(waUrl, mode: LaunchMode.externalApplication);
+                              } catch (e) {
+                                debugPrint('ERRO NO BOTAO: $e');
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(contextSB).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Erro ao abrir WhatsApp: ${e.toString()}'),
+                                    duration: const Duration(seconds: 3),
+                                  ),
+                                );
+                              }
+
                               try {
                                 if (!mounted) return;
+                                Navigator.of(ctx).pop();
+                              } catch (_) {}
+                            } catch (e) {
+                              debugPrint('ERRO NO BOTAO: $e');
+                              if (!mounted) return;
+                              try {
                                 ScaffoldMessenger.of(contextSB).showSnackBar(
                                   SnackBar(
                                     content: Text('Erro: ${e.toString()}'),
@@ -511,14 +641,39 @@ class _LoginPageState extends State<LoginPage> {
                         const SizedBox(height: 12),
                         TextField(
                           controller: novaCtl,
+                          style: const TextStyle(color: Colors.black),
                           obscureText: _obscureNova,
                           decoration: InputDecoration(
                             labelText: 'Nova senha',
+                            floatingLabelBehavior: FloatingLabelBehavior.always,
+                            labelStyle: const TextStyle(color: Colors.black),
+                            filled: true,
+                            fillColor: const Color(0xFFF5F5F5),
+                            hintStyle: const TextStyle(color: Colors.black54),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black12,
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black12,
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black26,
+                              ),
+                            ),
                             suffixIcon: IconButton(
                               icon: Icon(
                                 _obscureNova
                                     ? Icons.visibility_off
                                     : Icons.visibility,
+                                color: Colors.purple[700],
                               ),
                               onPressed: () => setStateSB(
                                 () => _obscureNova = !_obscureNova,
@@ -529,14 +684,39 @@ class _LoginPageState extends State<LoginPage> {
                         const SizedBox(height: 12),
                         TextField(
                           controller: confirmaCtl,
+                          style: const TextStyle(color: Colors.black),
                           obscureText: _obscureConfirma,
                           decoration: InputDecoration(
                             labelText: 'Confirmar senha',
+                            floatingLabelBehavior: FloatingLabelBehavior.always,
+                            labelStyle: const TextStyle(color: Colors.black),
+                            filled: true,
+                            fillColor: const Color(0xFFF5F5F5),
+                            hintStyle: const TextStyle(color: Colors.black54),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black12,
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black12,
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.black26,
+                              ),
+                            ),
                             suffixIcon: IconButton(
                               icon: Icon(
                                 _obscureConfirma
                                     ? Icons.visibility_off
                                     : Icons.visibility,
+                                color: Colors.purple[700],
                               ),
                               onPressed: () => setStateSB(
                                 () => _obscureConfirma = !_obscureConfirma,
@@ -653,9 +833,11 @@ class _LoginPageState extends State<LoginPage> {
     );
 
     try {
-      // ensure keyboard hidden
+      // ensure keyboard hidden (proteção mounted para uso de context)
       try {
-        FocusScope.of(parentContext).unfocus();
+        if (mounted) {
+          FocusScope.of(parentContext).unfocus();
+        }
       } catch (_) {}
       await Future.delayed(const Duration(milliseconds: 120));
     } catch (_) {}

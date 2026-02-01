@@ -156,13 +156,10 @@ void startCallback() {
 }
 
 class _DeliveryTaskHandler extends TaskHandler {
-  int _count = 0;
   bool _isPolling = false;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    // Inicialização do handler
-    _count = 0;
     // Garantir que o Supabase esteja inicializado dentro do isolate do foreground task
     try {
       // Tentar acessar o client; se não inicializado isso pode lançar
@@ -183,7 +180,6 @@ class _DeliveryTaskHandler extends TaskHandler {
 
   @override
   Future<void> onRepeatEvent(DateTime timestamp) async {
-    _count++;
     try {
       final String? uuidReal = await FlutterForegroundTask.getData<String>(
         key: 'driverId',
@@ -212,7 +208,7 @@ class _DeliveryTaskHandler extends TaskHandler {
         } catch (_) {
           lista = <dynamic>[];
         }
-        debugPrint('📦 Entregas encontradas: ${lista.length}');
+        // debugPrint('📦 Entregas encontradas: ${lista.length}');
 
         FlutterForegroundTask.sendDataToMain({
           'entregas': lista,
@@ -298,7 +294,9 @@ class _SplashPageState extends State<SplashPage> {
       final saved = prefs.getString('driver_name') ?? '';
       if (saved.isNotEmpty) {
         nomeMotorista = saved;
-        if (mounted) setState(() {});
+        if (mounted) {
+          setState(() {});
+        }
       }
     } catch (e) {
       debugPrint('Erro ao carregar driver_name nas prefs: $e');
@@ -319,8 +317,12 @@ class _SplashPageState extends State<SplashPage> {
 
       // Respeitar a preferência de 'manter_logado' do usuário
       final keep = prefs.getBool('manter_logado') ?? false;
-      final savedId = prefs.getInt('driver_id') ?? 0;
-      if (keep && savedId > 0) {
+      final savedIdStr =
+          prefs.getString('motorista_uuid') ??
+          prefs.getString('driver_id') ??
+          prefs.getInt('driver_id')?.toString() ??
+          '';
+      if (keep && savedIdStr.isNotEmpty && savedIdStr != '0') {
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const RotaMotorista()),
@@ -383,7 +385,8 @@ class _SplashPageState extends State<SplashPage> {
                     : int.tryParse(record['id'].toString()) ?? 0;
                 if (recId > 0) {
                   await prefsUpdate.setInt('driver_id', recId);
-                  idLogado = recId;
+                  await prefsUpdate.setString('driver_id', recId.toString());
+                  idLogado = recId.toString();
                 }
               }
             } catch (e) {
@@ -564,8 +567,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   String? _avatarPath;
   // Número do gestor, default para compatibilidade local — atualizado dinamicamente em carregarDados().
   String numeroGestor = '5548996525008';
-  // ID do motorista carregado nas prefs — inicializado como 0 por segurança
-  int _driverId = 0;
+  // ID do motorista carregado nas prefs — agora tratamos o ID como String (UUID ou numeric-as-string)
+  // Nota: `_driverId` removido; use `_motoristaId` em formato String.
   // ID do motorista vindo do Supabase (UUID string). Inicializa como '0' até
   // termos certeza do user logado. Usado para updates no Supabase que esperam UUID.
   String _motoristaId = '0';
@@ -576,7 +579,6 @@ class RotaMotoristaState extends State<RotaMotorista>
   StreamSubscription<Position>? _positionSubscription;
   // Timer para checar storage do foreground task e repassar dados para UI
   Timer? _fgStorageTimer;
-  String? _lastEntregasJson;
 
   // Solicita permissão de localização e inicia o stream de posições
   Future<void> _requestPermissionAndStartTracking() async {
@@ -586,13 +588,13 @@ class RotaMotoristaState extends State<RotaMotorista>
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
         if (!mounted) return;
-        // Mostrar alerta amigável se permissão negada
+        // Mostrar alerta claro se permissão negada
         showDialog<void>(
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('Permissão de Localização'),
             content: const Text(
-              'O aplicativo precisa da sua localização para funcionar corretamente. Por favor, ative o GPS nas configurações.',
+              'O GPS é obrigatório para trabalhar. Ative nas configurações.',
             ),
             actions: [
               TextButton(
@@ -602,6 +604,38 @@ class RotaMotoristaState extends State<RotaMotorista>
             ],
           ),
         );
+        return;
+      }
+
+      // Antes de iniciar o stream, garantir que o motorista esteja aprovado
+      final motoristaIdCheck = _motoristaId;
+      if (motoristaIdCheck == '0' || motoristaIdCheck.isEmpty) {
+        debugPrint('Rastreio não iniciado: motoristaId inválido.');
+        return;
+      }
+
+      try {
+        final dynamic q = await Supabase.instance.client
+            .from('motoristas')
+            .select('acesso')
+            .eq('id', motoristaIdCheck)
+            .limit(1);
+        String acesso = '';
+        if (q is List && q.isNotEmpty) {
+          acesso = (q.first['acesso'] ?? '').toString().toLowerCase();
+        } else if (q is Map &&
+            q['data'] != null &&
+            (q['data'] as List).isNotEmpty) {
+          acesso = ((q['data'] as List).first['acesso'] ?? '')
+              .toString()
+              .toLowerCase();
+        }
+        if (acesso != 'aprovado') {
+          debugPrint('Rastreio não iniciado: motorista não aprovado ($acesso)');
+          return;
+        }
+      } catch (e) {
+        debugPrint('Erro ao verificar aprovação no Supabase: $e');
         return;
       }
 
@@ -683,8 +717,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                 prefs.getString('driver_uuid') ??
                 prefs.getInt('driver_id')?.toString() ??
                 '';
-            // Se ainda vazio e temos um _driverId numérico, tentar buscar na tabela
-            if ((found.isEmpty || found == '0') && _driverId != 0) {
+            // Se ainda vazio e temos um motoristaId conhecido (numérico ou UUID), tentar buscar na tabela
+            if ((found.isEmpty || found == '0') &&
+                _motoristaId != '0' &&
+                _motoristaId.isNotEmpty) {
               try {
                 final client = Supabase.instance.client;
                 dynamic q = [];
@@ -693,7 +729,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                   final dynamic r = await client
                       .from('motoristas')
                       .select('id')
-                      .eq('id', _driverId)
+                      .eq('id', _motoristaId)
                       .limit(1);
                   debugPrint('DEBUG: Query motoristas by int raw: $r');
                   if (r is List) {
@@ -710,7 +746,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                     final dynamic r2 = await client
                         .from('motoristas')
                         .select('id')
-                        .eq('motorista_id', _driverId.toString())
+                        .eq('motorista_id', _motoristaId.toString())
                         .limit(1);
                     debugPrint(
                       'DEBUG: Query motoristas by motorista_id raw: $r2',
@@ -812,8 +848,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                 : int.tryParse((first['codigo_v10'] ?? '').toString());
             final nomeBanco = (first['nome'] ?? '').toString();
             debugPrint('🔍 Logado como: $nomeBanco');
-            if (candidate.isNotEmpty)
+            if (candidate.isNotEmpty) {
               return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
+            }
           }
         } else {
           debugPrint(
@@ -827,31 +864,36 @@ class RotaMotoristaState extends State<RotaMotorista>
       // Tentativa 3: usar driver_id das prefs e consultar a tabela para recuperar UUID
       try {
         final prefs = await SharedPreferences.getInstance();
-        final int? prefDriver = prefs.getInt('driver_id');
-        if (prefDriver != null && prefDriver != 0) {
+        final String? prefDriverStr =
+            prefs.getString('motorista_uuid') ??
+            prefs.getString('driver_id') ??
+            prefs.getInt('driver_id')?.toString();
+        if (prefDriverStr != null &&
+            prefDriverStr.isNotEmpty &&
+            prefDriverStr != '0') {
           final client = Supabase.instance.client;
           List<dynamic> res = [];
           try {
             final dynamic q = await client
                 .from('motoristas')
                 .select('id')
-                .eq('id', prefDriver)
+                .eq('id', prefDriverStr)
                 .limit(1);
-            debugPrint('DEBUG: query motoristas by int raw: $q');
+            debugPrint('DEBUG: query motoristas by id raw: $q');
             if (q is List) {
               res = q;
             } else if (q is Map && q['data'] != null) {
               res = q['data'] as List<dynamic>;
             }
           } catch (err) {
-            debugPrint('DEBUG: erro query motoristas by int: $err');
+            debugPrint('DEBUG: erro query motoristas by id: $err');
           }
           if (res.isEmpty) {
             try {
               final dynamic q2 = await client
                   .from('motoristas')
                   .select('id')
-                  .eq('motorista_id', prefDriver.toString())
+                  .eq('motorista_id', prefDriverStr.toString())
                   .limit(1);
               debugPrint('DEBUG: query motoristas by motorista_id raw: $q2');
               if (q2 is List) {
@@ -871,8 +913,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                 : int.tryParse((record['codigo_v10'] ?? '').toString());
             final nomeBanco = (record['nome'] ?? '').toString();
             debugPrint('🔍 Logado como: $nomeBanco');
-            if (candidate.isNotEmpty)
+            if (candidate.isNotEmpty) {
               return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
+            }
           }
         }
       } catch (e) {
@@ -903,6 +946,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   // Recebe dados vindos do foreground task (ou do fallback de storage)
+  // ignore: unused_element
   void _onReceiveTaskData(Object data) {
     try {
       if (data is Map && data['entregas'] != null) {
@@ -1142,7 +1186,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             debugPrint('FCM token refreshed: $newToken');
             try {
               final prefs = await SharedPreferences.getInstance();
-              if (newToken != null && newToken.isNotEmpty) {
+              if (newToken.isNotEmpty) {
                 await prefs.setString('fcm_token', newToken);
                 debugPrint('FCM token salvo em prefs: $newToken');
               }
@@ -1168,7 +1212,9 @@ class RotaMotoristaState extends State<RotaMotorista>
     // Carregar driver_id das SharedPreferences o quanto antes (não-bloqueante)
     SharedPreferences.getInstance().then((prefs) async {
       try {
-        _driverId = prefs.getInt('driver_id') ?? 0;
+        // antigo _driverId numeric removido; usar preferencialmente o UUID/string salvo
+        // (mantemos compatibilidade lendo driver_id como string se existir)
+        // _driverId = prefs.getInt('driver_id') ?? 0;
         // Tentar obter UUID do Supabase (aguardando caso ainda não tenha inicializado)
         debugPrint('DEBUG: Tentando pegar UUID do Supabase...');
         try {
@@ -1198,7 +1244,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         // Restaurar estado online salvo
         _isOnline = prefs.getBool('is_online') ?? false;
       } catch (_) {
-        _driverId = 0;
+        // ignore: avoid_empty_catches
       }
       // Buscar identidade real em cascata e iniciar LocationService somente se houver ID válido
       try {
@@ -1251,9 +1297,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         debugPrint('Erro ao buscar identidade real: $e');
       }
 
-      debugPrint(
-        '🚀 App iniciado - Driver ID: $_driverId, Supabase user: $_motoristaId',
-      );
+      debugPrint('🚀 App iniciado - Driver ID (string): $_motoristaId');
       // Tenta iniciar o serviço de localização (se implementado no projeto)
       try {
         _tryStartLocationServiceFor(_motoristaId);
@@ -1450,7 +1494,10 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
       try {
         if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
-          await FlutterForegroundTask.saveData(key: 'driverId', value: _motoristaId);
+          await FlutterForegroundTask.saveData(
+            key: 'driverId',
+            value: _motoristaId,
+          );
           debugPrint('driverId salvo no foreground storage');
         }
       } catch (e) {
@@ -1486,7 +1533,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     if (!mounted) return;
     // Se não conhecemos o motorista (nem numeric nem UUID), não aceitar listas vindas do servidor
     // — em vez disso garantir que a UI mostre 0 pedidos.
-    if (_driverId == 0 && (_motoristaId == '0' || _motoristaId.isEmpty)) {
+    if (_motoristaId == '0' || _motoristaId.isEmpty) {
       setState(() => entregas = []);
       try {
         if (!_entregasController.isClosed) _entregasController.add(entregas);
@@ -1577,6 +1624,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Única função de modal: `_buildSuccessModal` definida abaixo
 
   // Novas funções de áudio conforme especificação
+  // ignore: unused_element
   Future<void> _tocarSomFalha() async {
     try {
       await _audioPlayer.setVolume(1.0);
@@ -1625,11 +1673,17 @@ class RotaMotoristaState extends State<RotaMotorista>
               .from('motoristas')
               .update({'fcm_token': token})
               .eq('id', _motoristaId);
-        } else if (_driverId != 0) {
-          await Supabase.instance.client
-              .from('motoristas')
-              .update({'fcm_token': token})
-              .eq('id', _driverId);
+        } else {
+          final prefs = await SharedPreferences.getInstance();
+          final String? prefId =
+              prefs.getString('driver_id') ??
+              prefs.getInt('driver_id')?.toString();
+          if (prefId != null && prefId.isNotEmpty) {
+            await Supabase.instance.client
+                .from('motoristas')
+                .update({'fcm_token': token})
+                .eq('id', prefId);
+          }
         }
         // log claro para auditoria (não printar token)
         debugPrint('Token FCM salvo');
@@ -1646,12 +1700,22 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Atualiza o campo `esta_online` do motorista no Supabase
   Future<void> _atualizarStatusNoSupabase(bool status) async {
-    if (_driverId == 0) return;
     try {
+      String idToUse = '';
+      if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
+        idToUse = _motoristaId;
+      } else {
+        final prefs = await SharedPreferences.getInstance();
+        idToUse =
+            prefs.getString('driver_id') ??
+            prefs.getInt('driver_id')?.toString() ??
+            '';
+      }
+      if (idToUse.isEmpty || idToUse == '0') return;
       await Supabase.instance.client
           .from('motoristas')
           .update({'esta_online': status})
-          .eq('id', _driverId);
+          .eq('id', idToUse);
     } catch (e) {
       debugPrint('Erro status: $e');
     }
@@ -1750,6 +1814,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   // Envia relatório de falha para o gestor, toca som, remove o card e fecha modal
+  // ignore: unused_element
   Future<void> _enviarFalha(
     String cardId,
     String cliente,
@@ -1805,30 +1870,23 @@ class RotaMotoristaState extends State<RotaMotorista>
     }
 
     // 4) Agora executar o envio/desacoplado (compartilhar arquivo ou Whatsapp)
-    bool sharedSuccess = false;
     try {
       if (hasPhoto && imagemFalha != null) {
         final f = File(imagemFalha!);
         if (await f.exists()) {
-          sharedSuccess = await finalizarEnvio(f, report);
+          await finalizarEnvio(f, report);
         } else {
-          sharedSuccess = false;
           try {
             await _enviarWhatsApp(report, phone: numeroGestor);
-            sharedSuccess = true;
           } catch (_) {}
         }
       } else {
         try {
           await _enviarWhatsApp(report, phone: numeroGestor);
-          sharedSuccess = true;
-        } catch (_) {
-          sharedSuccess = false;
-        }
+        } catch (_) {}
       }
     } catch (e) {
       debugPrint('Erro no compartilhamento: $e');
-      sharedSuccess = false;
     }
 
     // Limpar preview da foto APÓS compartilhamento bem-sucedido
@@ -1898,7 +1956,9 @@ class RotaMotoristaState extends State<RotaMotorista>
         final bool isFailPhoto = imagemFalha != null && imagemFalha == p;
         if (exists && (isSuccessPhoto || isFailPhoto)) {
           try {
-            await SharePlus.instance.share(ShareParams(files: [XFile(p)], text: mensagem));
+            await SharePlus.instance.share(
+              ShareParams(files: [XFile(p)], text: mensagem),
+            );
             try {
               _resetModalPhotos();
             } catch (_) {}
@@ -1942,7 +2002,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       } catch (fbErr) {
         debugPrint('Erro no fallback _enviarWhatsApp: $fbErr');
         // Último recurso: compartilhar apenas texto
-          try {
+        try {
           await SharePlus.instance.share(ShareParams(text: mensagem));
           try {
             _resetModalPhotos();
@@ -1967,6 +2027,7 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Modal de FALHA (structuralmente espelhado ao modal de sucesso, tema vermelho)
   void _buildFailModal(BuildContext ctx, Map<String, dynamic> item) {
+    // ignore: unused_local_variable
     final String nomeCliente = item['cliente'] ?? '';
     _resetModalPhotos();
     String? motivoSelecionadoLocal;
@@ -1991,7 +2052,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             ];
 
             final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
-            final Color textColor = modoDia ? Colors.black87 : Colors.white;
+            final Color textColor = modoDia ? Colors.black : Colors.white;
             final Color secondary = modoDia ? Colors.black54 : Colors.white70;
             final Color fillColor = modoDia
                 ? Colors.grey.shade200
@@ -2050,7 +2111,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                             color: fillColor,
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: textColor.withOpacity(0.2),
+                              color: textColor.withValues(alpha: 0.2),
                             ),
                           ),
                           child: ClipRRect(
@@ -2250,7 +2311,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         report,
                                         phone: numeroGestor,
                                       );
-                                      try { _resetModalPhotos(); } catch (_) {}
+                                      try {
+                                        _resetModalPhotos();
+                                      } catch (_) {}
                                     }
                                   } catch (e) {
                                     debugPrint(
@@ -2260,14 +2323,18 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       report,
                                       phone: numeroGestor,
                                     );
-                                    try { _resetModalPhotos(); } catch (_) {}
+                                    try {
+                                      _resetModalPhotos();
+                                    } catch (_) {}
                                   }
                                 } else {
                                   await _enviarWhatsApp(
                                     report,
                                     phone: numeroGestor,
                                   );
-                                  try { _resetModalPhotos(); } catch (_) {}
+                                  try {
+                                    _resetModalPhotos();
+                                  } catch (_) {}
                                 }
                               } catch (e) {
                                 debugPrint('Erro ao disparar WhatsApp: $e');
@@ -2277,8 +2344,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                               await Future.delayed(const Duration(seconds: 1));
                               if (!mounted) return;
                               try {
-                                if (Navigator.of(context).canPop())
+                                if (Navigator.of(context).canPop()) {
                                   Navigator.of(context).pop();
+                                }
                               } catch (e) {
                                 debugPrint(
                                   'Erro ao fechar modal após envio: $e',
@@ -2303,6 +2371,7 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Única função de modal: abre o bottom sheet de sucesso
   void _buildSuccessModal(BuildContext ctx, Map<String, dynamic> item) {
+    // ignore: unused_local_variable
     final String nomeCliente = item['cliente'] ?? '';
     _resetModalPhotos();
     String? opcaoSelecionada;
@@ -2321,7 +2390,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 .toList();
 
             final Color bg = modoDia ? Colors.white : Colors.grey[900]!;
-            final Color textColor = modoDia ? Colors.black87 : Colors.white;
+            final Color textColor = modoDia ? Colors.black : Colors.white;
             final Color secondary = modoDia ? Colors.black54 : Colors.white70;
             final Color fillColor = modoDia
                 ? Colors.grey.shade200
@@ -2602,11 +2671,15 @@ class RotaMotoristaState extends State<RotaMotorista>
                                           try {
                                             final String? pathToSend =
                                                 fotoEvidencia?.path ??
-                                                    pickedImageLocal?.path ??
-                                                    caminhoFotoSession;
+                                                pickedImageLocal?.path ??
+                                                caminhoFotoSession;
                                             if (pathToSend != null) {
                                               await SharePlus.instance.share(
-                                                  ShareParams(files: [XFile(pathToSend)], text: mensagem));
+                                                ShareParams(
+                                                  files: [XFile(pathToSend)],
+                                                  text: mensagem,
+                                                ),
+                                              );
                                             } else {
                                               // fallback para texto se arquivo não existir
                                               await _enviarWhatsApp(
@@ -2818,14 +2891,12 @@ class RotaMotoristaState extends State<RotaMotorista>
           if (!mounted) return;
           setState(() {
             // Se não sabemos o motorista, mostrar lista vazia para evitar dados globais
-            if (_driverId == 0) {
+            if (_motoristaId == '0' || _motoristaId.isEmpty) {
               entregas = <Map<String, String>>[];
             } else {
-              // filtrar cache para incluir apenas entregas do motorista
+              // filtrar cache para incluir apenas entregas do motorista (usar _motoristaId string)
               entregas = lista
-                  .where(
-                    (m) => (m['motorista_id'] ?? '') == _driverId.toString(),
-                  )
+                  .where((m) => (m['motorista_id'] ?? '') == _motoristaId)
                   .toList();
             }
             _atualizarContadores();
@@ -2903,7 +2974,9 @@ class RotaMotoristaState extends State<RotaMotorista>
           }
         }
         if (candidate.isNotEmpty) {
-          if (mounted) setState(() => numeroGestor = candidate);
+          if (mounted) {
+            setState(() => numeroGestor = candidate);
+          }
         }
       } catch (e) {
         debugPrint('Erro ao ler config gestor: $e');
@@ -3014,7 +3087,9 @@ class RotaMotoristaState extends State<RotaMotorista>
           _hasInitialSync = true;
         });
         // forçar rebuild adicional para garantir atualização imediata da UI
-        if (mounted) setState(() {});
+        if (mounted) {
+          setState(() {});
+        }
         debugPrint('Lista atualizada com ${lista.length} pedidos');
 
         // Salvar em cache local para uso offline (debounced)
@@ -3272,20 +3347,36 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     // Start foreground service + polling
                                     await _startForegroundService();
                                     _startPolling();
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Você está ONLINE'),
-                                      ),
-                                    );
+                                    if (!mounted) return;
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text('Você está ONLINE'),
+                                            ),
+                                          );
+                                        });
                                   } else {
                                     // Stop service + polling
                                     await _stopForegroundService();
                                     _stopPolling();
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Você está OFFLINE'),
-                                      ),
-                                    );
+                                    if (!mounted) return;
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Você está OFFLINE',
+                                              ),
+                                            ),
+                                          );
+                                        });
                                   }
                                 } catch (e) {
                                   debugPrint('Erro toggling online: $e');
@@ -3301,8 +3392,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   boxShadow: _isOnline
                                       ? [
                                           BoxShadow(
-                                            color: Colors.green.withOpacity(
-                                              0.45,
+                                            color: Colors.green.withValues(
+                                              alpha: 0.45,
                                             ),
                                             blurRadius: 8,
                                             spreadRadius: 1,
