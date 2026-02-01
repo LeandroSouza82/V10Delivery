@@ -206,7 +206,12 @@ class _DeliveryTaskHandler extends TaskHandler {
             .or('status.eq.aguardando,status.eq.pendente')
             .order('id', ascending: false);
 
-        final List<dynamic> lista = (response is List) ? response : <dynamic>[];
+        List<dynamic> lista;
+        try {
+          lista = List<dynamic>.from(response as List<dynamic>);
+        } catch (_) {
+          lista = <dynamic>[];
+        }
         debugPrint('📦 Entregas encontradas: ${lista.length}');
 
         FlutterForegroundTask.sendDataToMain({
@@ -615,7 +620,7 @@ class RotaMotoristaState extends State<RotaMotorista>
           Geolocator.getPositionStream(locationSettings: settings).listen(
             (Position pos) async {
               try {
-                final motoristaId = _motoristaId ?? '0';
+                final motoristaId = _motoristaId;
                 // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
                 if (motoristaId == '0' || motoristaId.isEmpty) return;
 
@@ -721,8 +726,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                     );
                   }
                 }
-                if ((q as List).isNotEmpty) {
-                  final record = (q as List).first as Map<String, dynamic>;
+                if (q is List && q.isNotEmpty) {
+                  final record = Map<String, dynamic>.from(q.first as Map);
                   final candidate = (record['id'] ?? '').toString();
                   if (candidate.isNotEmpty) found = candidate;
                 }
@@ -1893,14 +1898,13 @@ class RotaMotoristaState extends State<RotaMotorista>
         final bool isFailPhoto = imagemFalha != null && imagemFalha == p;
         if (exists && (isSuccessPhoto || isFailPhoto)) {
           try {
-            // ignore: deprecated_member_use
-            await Share.shareXFiles([XFile(p)], text: mensagem);
+            await SharePlus.instance.share(ShareParams(files: [XFile(p)], text: mensagem));
             try {
               _resetModalPhotos();
             } catch (_) {}
             return true;
           } catch (shareErr) {
-            debugPrint('Erro ao usar Share.shareXFiles: $shareErr');
+            debugPrint('Erro ao usar SharePlus.shareXFiles: $shareErr');
             // continuar para fallback
           }
         } else {
@@ -1913,7 +1917,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       // Tentar abrir WhatsApp nativo (sem foto ou se share falhar)
       try {
         final String textEncoded = Uri.encodeComponent(mensagem);
-        final String phone = (numeroGestor ?? '').replaceAll('+', '');
+        final String phone = numeroGestor.replaceAll('+', '');
         final Uri uriWhatsApp = Uri.parse(
           'whatsapp://send?phone=$phone&text=$textEncoded',
         );
@@ -1938,8 +1942,8 @@ class RotaMotoristaState extends State<RotaMotorista>
       } catch (fbErr) {
         debugPrint('Erro no fallback _enviarWhatsApp: $fbErr');
         // Último recurso: compartilhar apenas texto
-        try {
-          await Share.share(mensagem);
+          try {
+          await SharePlus.instance.share(ShareParams(text: mensagem));
           try {
             _resetModalPhotos();
           } catch (_) {}
@@ -2601,11 +2605,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                                                     pickedImageLocal?.path ??
                                                     caminhoFotoSession;
                                             if (pathToSend != null) {
-                                              // ignore: deprecated_member_use
-                                              await Share.shareXFiles([
-                                                XFile(pathToSend)
-                                              ],
-                                                  text: mensagem);
+                                              await SharePlus.instance.share(
+                                                  ShareParams(files: [XFile(pathToSend)], text: mensagem));
                                             } else {
                                               // fallback para texto se arquivo não existir
                                               await _enviarWhatsApp(
@@ -3153,9 +3154,8 @@ class RotaMotoristaState extends State<RotaMotorista>
 
     // compartilhar (texto em linhas separadas)
     try {
-      // usar API compatível; método `shareXFiles` está deprecado mas funcional
-      // ignore: deprecated_member_use
-      await Share.shareXFiles(files, text: mensagem);
+      // usar API moderna do share_plus
+      await SharePlus.instance.share(ShareParams(files: files, text: mensagem));
     } catch (e) {
       // erro ignorado - remover logs de depuração
     }
