@@ -284,8 +284,8 @@ class _LoginPageState extends State<LoginPage> {
                     alignment: Alignment.bottomRight,
                     child: Padding(
                       padding: const EdgeInsets.only(top: 8.0, right: 4.0),
-                        child: Text(
-                          'Versão Beta 1.0.2.3',
+                      child: Text(
+                        'Versão Beta 1.0.2.3',
                         style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
                     ),
@@ -386,7 +386,10 @@ class _LoginPageState extends State<LoginPage> {
                           _mostrarModalEsqueciSenha(context);
                         },
                         child: const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+                          padding: EdgeInsets.symmetric(
+                            vertical: 8.0,
+                            horizontal: 4.0,
+                          ),
                           child: Text(
                             'Esqueci minha senha?',
                             style: TextStyle(color: Color(0xFF6750A4)),
@@ -541,7 +544,9 @@ class _LoginPageState extends State<LoginPage> {
                             try {
                               // limpar qualquer SnackBar existente para manter a UI limpa
                               try {
-                                ScaffoldMessenger.of(contextSB).removeCurrentSnackBar();
+                                ScaffoldMessenger.of(
+                                  contextSB,
+                                ).removeCurrentSnackBar();
                               } catch (_) {}
 
                               final email = emailCtl.text.trim();
@@ -549,7 +554,9 @@ class _LoginPageState extends State<LoginPage> {
                                 if (!mounted) return;
                                 ScaffoldMessenger.of(contextSB).showSnackBar(
                                   const SnackBar(
-                                    content: Text('Por favor, digite seu e-mail'),
+                                    content: Text(
+                                      'Por favor, digite seu e-mail',
+                                    ),
                                     duration: Duration(seconds: 2),
                                   ),
                                 );
@@ -566,37 +573,55 @@ class _LoginPageState extends State<LoginPage> {
                               if (resp == null) {
                                 if (!mounted) return;
                                 try {
-                                  ScaffoldMessenger.of(contextSB).removeCurrentSnackBar();
+                                  ScaffoldMessenger.of(
+                                    contextSB,
+                                  ).removeCurrentSnackBar();
                                 } catch (_) {}
                                 ScaffoldMessenger.of(contextSB).showSnackBar(
                                   const SnackBar(
-                                    content: Text('E-mail não cadastrado! Verifique os dados.'),
+                                    content: Text(
+                                      'E-mail não cadastrado! Verifique os dados.',
+                                    ),
                                     duration: Duration(seconds: 3),
                                   ),
                                 );
                                 return;
                               }
 
-                              final telefone = (resp['telefone'] ?? '').toString();
+                              final telefone = (resp['telefone'] ?? '')
+                                  .toString();
                               final senha = (resp['senha'] ?? '').toString();
 
                               // limpar telefone e prefixar DDI +55
-                              final phoneDigits = telefone.replaceAll(RegExp(r'\D'), '');
-                              final phoneWithDdi = phoneDigits.startsWith('55') ? phoneDigits : '55$phoneDigits';
+                              final phoneDigits = telefone.replaceAll(
+                                RegExp(r'\D'),
+                                '',
+                              );
+                              final phoneWithDdi = phoneDigits.startsWith('55')
+                                  ? phoneDigits
+                                  : '55$phoneDigits';
 
                               if (!mounted) return;
                               // abrir WhatsApp imediatamente (externo)
-                              final msg = Uri.encodeComponent('Olá, sua senha V10 é: $senha');
-                              final waUrl = 'https://wa.me/$phoneWithDdi?text=$msg';
+                              final msg = Uri.encodeComponent(
+                                'Olá, sua senha V10 é: $senha',
+                              );
+                              final waUrl =
+                                  'https://wa.me/$phoneWithDdi?text=$msg';
 
                               try {
-                                await launchUrlString(waUrl, mode: LaunchMode.externalApplication);
+                                await launchUrlString(
+                                  waUrl,
+                                  mode: LaunchMode.externalApplication,
+                                );
                               } catch (e) {
                                 debugPrint('ERRO NO BOTAO: $e');
                                 if (!mounted) return;
                                 ScaffoldMessenger.of(contextSB).showSnackBar(
                                   SnackBar(
-                                    content: Text('Erro ao abrir WhatsApp: ${e.toString()}'),
+                                    content: Text(
+                                      'Erro ao abrir WhatsApp: ${e.toString()}',
+                                    ),
                                     duration: const Duration(seconds: 3),
                                   ),
                                 );

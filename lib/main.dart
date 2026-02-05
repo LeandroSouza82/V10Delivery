@@ -2848,6 +2848,12 @@ class RotaMotoristaState extends State<RotaMotorista>
           final lista = cached.map<Map<String, String>>((m) {
             return m.map((k, v) => MapEntry(k, v?.toString() ?? ''));
           }).toList();
+          // Ordenar por ordem_logistica
+          lista.sort((a, b) {
+            final ordemA = int.tryParse(a['ordem_logistica'] ?? '999') ?? 999;
+            final ordemB = int.tryParse(b['ordem_logistica'] ?? '999') ?? 999;
+            return ordemA.compareTo(ordemB);
+          });
           _setEntregas(List<dynamic>.from(lista));
           _atualizarContadores();
         } else {
@@ -2895,9 +2901,18 @@ class RotaMotoristaState extends State<RotaMotorista>
               entregas = <Map<String, String>>[];
             } else {
               // filtrar cache para incluir apenas entregas do motorista (usar _motoristaId string)
-              entregas = lista
+              final listaFiltrada = lista
                   .where((m) => (m['motorista_id'] ?? '') == _motoristaId)
                   .toList();
+              // Ordenar por ordem_logistica
+              listaFiltrada.sort((a, b) {
+                final ordemA =
+                    int.tryParse(a['ordem_logistica'] ?? '999') ?? 999;
+                final ordemB =
+                    int.tryParse(b['ordem_logistica'] ?? '999') ?? 999;
+                return ordemA.compareTo(ordemB);
+              });
+              entregas = listaFiltrada;
             }
             _atualizarContadores();
           });
@@ -3014,6 +3029,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                 m['observacao']?.toString() ??
                 m['obs']?.toString() ??
                 '',
+            // incluir ordem_logistica para ordenação correta
+            'ordem_logistica': m['ordem_logistica']?.toString() ?? '999',
           };
         }).toList();
 
@@ -3029,6 +3046,15 @@ class RotaMotoristaState extends State<RotaMotorista>
             return;
           }
         } catch (_) {}
+
+        // ================================================================
+        // ORDENAÇÃO POR ordem_logistica
+        // ================================================================
+        lista.sort((a, b) {
+          final ordemA = int.tryParse(a['ordem_logistica'] ?? '999') ?? 999;
+          final ordemB = int.tryParse(b['ordem_logistica'] ?? '999') ?? 999;
+          return ordemA.compareTo(ordemB);
+        });
 
         // ================================================================
         // DETECÇÃO DE NOVO PEDIDO E DISPARO DE SOM chama.mp3
@@ -4069,7 +4095,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Cabeçalho compacto: número e tipo na mesma linha
+                    // Cabeçalho compacto: número da ordem_logistica e tipo na mesma linha
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
@@ -4082,7 +4108,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                           ),
                           child: Center(
                             child: Text(
-                              '${index + 1}',
+                              '${item['ordem_logistica'] ?? '?'}',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,

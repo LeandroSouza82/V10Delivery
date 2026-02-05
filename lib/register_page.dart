@@ -53,14 +53,16 @@ class _RegisterPageState extends State<RegisterPage> {
       try {
         ScaffoldMessenger.of(context).removeCurrentSnackBar();
       } catch (_) {}
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Senhas não coincidem')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Senhas não coincidem')));
       return;
     }
 
     final emailValue = _email.text.trim();
-    if (emailValue.isEmpty || !emailValue.contains('@') || !emailValue.contains('.com')) {
+    if (emailValue.isEmpty ||
+        !emailValue.contains('@') ||
+        !emailValue.contains('.com')) {
       if (!mounted) return;
       try {
         ScaffoldMessenger.of(context).removeCurrentSnackBar();
@@ -196,32 +198,39 @@ class _RegisterPageState extends State<RegisterPage> {
       try {
         if (mounted) ScaffoldMessenger.of(context).removeCurrentSnackBar();
       } catch (_) {}
-        if (mounted) {
-          // detectar erro conhecido de coluna 'aprovado' ausente no schema
-          if (errStr.contains('column "aprovado"') || (errStr.contains('aprovad') && errStr.contains('column'))) {
-            debugPrint('Schema error detectado ao cadastrar motorista: $e');
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Erro de schema: coluna "aprovado" não encontrada no banco. Contate o desenvolvedor.'),
-                backgroundColor: Colors.red,
+      if (mounted) {
+        // detectar erro conhecido de coluna 'aprovado' ausente no schema
+        if (errStr.contains('column "aprovado"') ||
+            (errStr.contains('aprovad') && errStr.contains('column'))) {
+          debugPrint('Schema error detectado ao cadastrar motorista: $e');
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Erro de schema: coluna "aprovado" não encontrada no banco. Contate o desenvolvedor.',
               ),
-            );
-          } else if (errStr.contains('unique') || errStr.contains('duplicate') || errStr.contains('already')) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Este CPF ou E-mail já está cadastrado!'),
-                backgroundColor: Colors.red,
+              backgroundColor: Colors.red,
+            ),
+          );
+        } else if (errStr.contains('unique') ||
+            errStr.contains('duplicate') ||
+            errStr.contains('already')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Este CPF ou E-mail já está cadastrado!'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Erro ao salvar os dados: ${e.toString().split('\n').first}',
               ),
-            );
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Erro ao salvar os dados: ${e.toString().split('\n').first}'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
+              backgroundColor: Colors.red,
+            ),
+          );
         }
+      }
     } finally {
       if (mounted) {
         setState(() => _loading = false);
