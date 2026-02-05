@@ -4030,9 +4030,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   Widget _buildCard(Map<String, String> item, int index) {
-    // Normalizar 'tipo' antes da comparação e debugar o valor exato recebido
+    // Normalizar 'tipo' antes da comparação
     final tipoTratado = (item['tipo'] ?? '').toString().trim().toLowerCase();
-    debugPrint('Tipo recebido: |${item['tipo']}|');
 
     // Fixar cor da barra lateral conforme tipo (ENTREGA, RECOLHA, OUTROS)
     final corItem = tipoTratado == 'entrega'
@@ -4184,11 +4183,6 @@ class RotaMotoristaState extends State<RotaMotorista>
                     // Observações/aviso do gestor (usar obrigatoriamente 'observacoes')
                     Builder(
                       builder: (ctx) {
-                        // DEBUG: mostrar chaves recebidas do banco
-                        try {
-                          debugPrint('Colunas disponíveis: ${item.keys}');
-                        } catch (_) {}
-
                         final obs =
                             item['observacoes'] ??
                             item['observacao'] ??
