@@ -1,0 +1,68 @@
+[33ma3e5258[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m build: preparar app para produção v1.0.1+4
+[33m99083f1[m feat: adicionar suporte ao campo ordem_logistica
+[33m7e7b45c[m fix: robustez na recuperação e cadastro  mensagens, mounted guards, schema 'acesso'
+[33m57424fb[m Refactor: migrar share_plus -> ShareParams; limpar casts e avisos menores
+[33mde0fabd[m Estabilização dos modais de OK/Falha, correção de fotos fantasmas e atualização do SharePlus
+[33maefae4f[m fix(polling): read driverId from foreground storage, stabilize background polling, UI bridge and audio initial sync
+[33m18adac0[m Merge feature/ajuste-gps-v10: consolidar GPS
+[33md5d8ea6[m[33m ([m[1;31morigin/feature/ajuste-gps-v10[m[33m)[m feat: GPS funcional com UUID real e status disponivel
+[33m2ebdcd1[m fix(android): kotlinOptions jvmTarget and keystore FileInputStream import
+[33m1883f3d[m chore(android): add key.properties template and configure signingConfigs (release) in app build.gradle.kts
+[33m9a9e67d[m fix(sync): atualizar estado esta_online no Supabase ao toggle e initState
+[33mb14fbd5[m feat(ui): botão Online/Offline no AppBar + persistência e controle de polling/foreground
+[33mb228cf4[m feat: foreground service (flutter_foreground_task) + manifest + pubspec
+[33m4e6cf64[m Implementação: notificações FCM, Google Services plugin e polling centralizado
+[33m23084d0[m feat: sincroniza token FCM no Supabase (motoristas.fcm_token)
+[33m7a2abb9[m Salvar alterações: ajustar polling e logs
+[33m5594471[m Corrige polling, detecção de som e logs (polling 10s, carregarDados, _totalEntregasAntigo, debugPrint)
+[33m840c0a9[m Remove unused formatters and imports from register_page.dart
+[33mfec9fd1[m NotificationService: enforce notificationdialogoverlay sequence; require auth before overlay; pass navigatorKey from main
+[33me873c36[m NotificationService: saveTokenToSupabase simplified to use Supabase.auth.currentUser?.id and print result
+[33m22ee1b7[m NotificationService: saveTokenToSupabase -> update only profiles table
+[33m852279d[m NotificationService: saveTokenToSupabase(token) - update profiles/usuarios/motoristas on token obtain/refresh
+[33m051633a[m NotificationService: add initialize(), centralize Firebase Messaging, print FCM token on startup; update main.dart
+[33m18c3a3d[m Extract Firebase Messaging setup into NotificationService; centralize handlers and token logging; create pedidos channel via native
+[33m1c7d8ac[m Create NotificationService and ensure 'pedidos' channel uses sound 'buzina' (no .mp3)
+[33m227b714[m Add flutter_launcher_icons config and drawer UI adjustments
+[33m97f9ba2[m[33m ([m[1;32msandbox/ui-tests[m[33m)[m auto: save local changes before merge
+[33m7b8caf6[m feat(login): manter logado, auto-login, recuperação de senha; logout limpa prefs; remove key duplicada
+[33m613a358[m[33m ([m[1;31morigin/sandbox/ui-tests[m[33m)[m feat(auth): implement DB-based register and login flows (motoristas table) and update globals
+[33m7b81dae[m feat(auth): implement DB-based register and login flows (motoristas table) and update globals
+[33mc6f8b36[m chore: merge test/bypass-login into sandbox for UI tests
+[33m40b160a[m[33m ([m[1;31morigin/test/bypass-login[m[33m, [m[1;32mtest/bypass-login[m[33m)[m chore: testar telas internas  forçar idLogado=1 e direcionar home para RotaMotorista
+[33m3490082[m fix(auth): use Web serverClientId for GoogleSignIn; capture email; prefs sync
+[33m9d0b8e1[m Fix auth navigation: Splash->Login, Login->V10DeliveryApp; add main import
+[33md1accee[m Fix analyzer warnings in main.dart and avisos_modal.dart
+[33m13e4e5a[m feat(auth): login 'stay logged' checkbox, save pref; add logout button; style enter button
+[33m386b51e[m ui: polling indicator cloud icon (blink on check, red if offline)
+[33mad41728[m ui: polling indicator cloud icon (blink on check, red if offline)
+[33m87e1d24[m feat(cache): save deliveries to local cache on polling updates
+[33m2914728[m chore: polling -> update UI inside setState; auto-refresh deliveries; add scroll controller
+[33m0ba21c4[m chore: save workspace changes
+[33m433ccb5[m fix: avisos modal - remove auto-mark-read; add polling; ensure setState updates
+[33m84293c4[m feat: modal avisos - toggle lido por item; recarrega lista no modal; atualiza badge
+[33m6c7f05f[m feat: avisos_gestor modal + marcar como lidos ao abrir; badge updates
+[33m3e19933[m feat: indicadores topo - modos de cor; ui: modoDia header icons
+[33m4597e4b[m fix: atualizar contadores e status bar transparente
+[33meda57c0[m Inclui campo 'status' no mapeamento de entregas em carregarDados()
+[33m40b6f13[m UI: remover item localmente em _enviarFalha usando _entregas; adicionar alias getter
+[33ma6bbb5c[m Atualiza UI imediata: notificar stream após remoção local em sucesso de entrega/falha
+[33m3b80d70[m Adicionar modal de falha: payload (status=falha, motivo_nao_entrega, obs, data_conclusao) e envio seguro
+[33m869db14[m Padroniza status 'entregue' e filtra entregas pendentes/em_rota; atualiza relatório
+[33m6fa99d4[m Fix: usar Builder(context) no menu para abrir endDrawer
+[33mf9213d5[m UI: Atualiza appBar e _buildIndicatorCard; adiciona bordas por tipo e estilo marrom
+[33m59c6f99[m Save: alterações recentes em main.dart
+[33m40c7f98[m UI: dark header theme, indicator cards in white on dark, status bar, and minor fixes
+[33m4d70e85[m UI: mover carregamento para drawer, adicionar menu lateral, balão de observações e correções depreciação
+[33m19cb912[m Observacoes: fallback multiple keys + debug print
+[33maf135c0[m Remover tipo inline; promover observacoes; limpeza UI
+[33m01659d9[m Add device screenshot
+[33ma582634[m Ajuste card: usar 'observacoes', borda colorida 2.0 e FittedBox nos botões
+[33mf426ac5[m feat(ui): ajustar layout do card - bolinha menor, tipo, obs condicional
+[33mcf6f1d7[m Versão Estável: Supabase Conectado e Cache OK
+[33m14d087b[m fix(ui): remover busca, travar tema claro, forçar cards brancos, ordenar consulta 'ordem_entrega' com fallback
+[33m69c7a9c[m Versão V10 - Personalização Leandro: Foto, Cores e Cards Compactos
+[33mc619136[m Final: Modal Entrega, Botão 3D, Regra 3 letras e Recebido por
+[33m17e9004[m Update: Ajuste Locker composto, Fotos na Falha e Envio Direto WhatsApp
+[33mbf7b43c[m refactor: eliminação de dead code e migração para API moderna de share
+[33mee02fcc[m chore: remover deprecações de opacidade; ajustar Matrix4; tornar State pública; atualizar teste

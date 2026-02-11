@@ -7,7 +7,32 @@ import 'register_page.dart';
 import 'admin_approval_page.dart';
 import 'globals.dart';
 import 'main.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
+
+const String kLogoPath = 'assets/images/branco.jpg';
+
+// Helper para login social (Google) — para Flutter Web use fluxo OAuth
+Future<void> signInWithGoogleWeb(BuildContext context) async {
+  try {
+    // A API exata depende da versão do supabase_flutter; usamos signInWithOAuth quando disponível.
+    final client = Supabase.instance.client;
+    if (client == null) return;
+    try {
+      await client.auth.signInWithOAuth(OAuthProvider.google);
+    } catch (e) {
+      // fallback: tentar método genérico e logar instruções
+      debugPrint('Google sign-in: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Erro ao iniciar login com Google (verifique configuração Web).',
+          ),
+        ),
+      );
+    }
+  } catch (e) {
+    debugPrint('Erro signInWithGoogleWeb: $e');
+  }
+}
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -34,131 +59,107 @@ class _LoginPageState extends State<LoginPage> {
   // removed unused wrapper for reset dialog; use `_mostrarModalEsqueciSenha()` directly
 
   Future<void> _login() async {
+    // Início do método: ajuda a diagnosticar se o botão está conectado
+    print('>>> ESTOU AQUI: _login');
     setState(() => _loading = true);
     try {
-      final email = _emailCtl.text.trim();
-      final pass = _passCtl.text.trim();
+      // Forçar uso de credenciais fixas para teste (evita dependência dos campos de texto)
+      const testEmail = 'lsouza557@gmail.com';
+      const testPass = '555555';
 
-      // senha mestra para admin rápido
-      if (pass == '4071') {
-        if (!mounted) return;
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const AdminApprovalPage()),
+      debugPrint('Iniciando tentativa de login com e-mail fixo para teste');
+
+      // Tentar autenticação direta com Supabase
+      try {
+        await Supabase.instance.client.auth.signInWithPassword(
+          email: testEmail,
+          password: testPass,
         );
-        return;
+        debugPrint('Auth: signInWithPassword executado (sem exceção)');
+      } catch (e) {
+        debugPrint('Auth error (login): $e');
       }
 
-      if (email.isEmpty || pass.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Preencha e-mail e senha')),
-          );
-        }
-        return;
-      }
+      // Buscar motorista pelo e-mail fixo (Leandro tem user_id nulo)
+      try {
+        final motorista = await Supabase.instance.client
+            .from('motoristas')
+            .select()
+            .eq('email', testEmail)
+            .maybeSingle();
 
-      // Consulta direta na tabela motoristas
-      final motorista = await Supabase.instance.client
-          .from('motoristas')
-          .select()
-          .eq('email', email)
-          .eq('senha', pass)
-          .maybeSingle();
-
-      if (motorista == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Dados incorretos')));
-        }
-        return;
-      }
-
-      final Map<String, dynamic> record = Map<String, dynamic>.from(motorista);
-      final acesso = (record['acesso'] ?? '').toString().toLowerCase();
-
-      if (acesso == 'pendente' || acesso.isEmpty) {
-        if (mounted) {
-          await showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('Aguardando aprovação'),
-              content: const Text('Aguardando Aprovação do Gestor.'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('OK'),
+        if (motorista == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Motorista não encontrado para o e-mail de teste',
                 ),
-              ],
-            ),
-          );
+              ),
+            );
+          }
+          return;
         }
-        return;
-      }
 
-      if (acesso == 'aprovado') {
-        final recId = record['id'] is int
-            ? record['id'] as int
-            : int.tryParse(record['id'].toString()) ?? 0;
+        final Map<String, dynamic> record = Map<String, dynamic>.from(
+          motorista,
+        );
+        final acesso = (record['acesso'] ?? '').toString().toLowerCase();
+        if (acesso == 'pendente' || acesso.isEmpty) {
+          if (mounted) {
+            await showDialog<void>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Aguardando aprovação'),
+                content: const Text('Aguardando Aprovação do Gestor.'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+          }
+          return;
+        }
+
+        // Extrair id (UUID ou int) e nome
+        final dynamic rawId = record['id'];
+        int recId = 0;
+        String? recUuid;
+        if (rawId is int) {
+          recId = rawId as int;
+        } else if (rawId is String) {
+          final s = rawId.toString();
+          if (s.contains('-')) {
+            recUuid = s;
+          } else {
+            recId = int.tryParse(s) ?? 0;
+          }
+        }
         final nome = (record['nome'] ?? '').toString();
 
-        // salvar prefs e variáveis globais
+        // Persistir prefs
         final prefs = await SharedPreferences.getInstance();
-        // Persistir o e-mail do motorista assim que o login for bem-sucedido
         try {
-          await prefs.setString('email_salvo', email);
+          await prefs.setString('email_salvo', testEmail);
         } catch (_) {}
-        // Persistir a escolha do usuário de manter logado (aguardar a conclusão)
         await prefs.setBool('manter_logado', _keep);
-        // Persistir a escolha de lembrar e-mail
         if (_rememberEmail) {
-          await prefs.setString('email_salvo', email);
+          await prefs.setString('email_salvo', testEmail);
         } else {
           await prefs.remove('email_salvo');
         }
-        await prefs.setInt('driver_id', recId);
-        await prefs.setString('driver_name', nome);
-        idLogado = recId;
-        nomeMotorista = nome;
-
-        // Registrar token FCM para este motorista (pede permissão e atualiza tabela)
-        try {
-          try {
-            await FirebaseMessaging.instance.requestPermission();
-          } catch (_) {}
-          final fcmToken = await FirebaseMessaging.instance.getToken();
-          if (fcmToken != null && fcmToken.isNotEmpty) {
-            try {
-              // Preferir atualizar pelo UUID se presente no registro retornado
-              final possibleId = record['id'];
-              if (possibleId is String && possibleId.contains('-')) {
-                await Supabase.instance.client
-                    .from('motoristas')
-                    .update({'fcm_token': fcmToken})
-                    .eq('id', possibleId);
-              } else {
-                await Supabase.instance.client
-                    .from('motoristas')
-                    .update({'fcm_token': fcmToken})
-                    .eq('email', email);
-              }
-              // Log pedido: token salvo
-              print('🚀 Token FCM salvo: $fcmToken');
-            } catch (e) {
-              // não bloquear o login por falha ao atualizar o banco
-              debugPrint('Erro atualizando fcm_token no login: $e');
-            }
-            try {
-              await prefs.setString('fcm_token', fcmToken);
-            } catch (_) {}
-          } else {
-            // token nulo — pode acontecer em ambientes de teste
-            debugPrint('FCM token ausente para $email');
-          }
-        } catch (e) {
-          debugPrint('Erro ao registrar FCM: $e');
+        if (recUuid != null && recUuid.isNotEmpty) {
+          await prefs.setString('driver_uuid', recUuid);
         }
+        if (recId > 0) {
+          await prefs.setInt('driver_id', recId);
+          idLogado = recId;
+        }
+        await prefs.setString('driver_name', nome);
+        nomeMotorista = nome;
 
         if (!mounted) return;
         Navigator.pushReplacement(
@@ -166,15 +167,13 @@ class _LoginPageState extends State<LoginPage> {
           MaterialPageRoute(builder: (_) => const RotaMotorista()),
         );
         return;
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
+      } catch (e) {
+        debugPrint('Erro durante busca/autenticação de teste: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Erro: ${e.toString()}')));
+        }
       }
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -248,7 +247,9 @@ class _LoginPageState extends State<LoginPage> {
                     child: FutureBuilder<bool>(
                       future: () async {
                         try {
-                          await rootBundle.load('assets/logo_v10.png');
+                          // proteger contra null/paths inválidos
+                          final path = kLogoPath;
+                          await rootBundle.load(path);
                           return true;
                         } catch (_) {
                           return false;
@@ -258,7 +259,7 @@ class _LoginPageState extends State<LoginPage> {
                         if (snap.connectionState == ConnectionState.done &&
                             snap.data == true) {
                           return Image.asset(
-                            'assets/logo_v10.png',
+                            kLogoPath,
                             width: MediaQuery.of(context).size.width * 0.45,
                             fit: BoxFit.contain,
                           );
@@ -455,21 +456,30 @@ class _LoginPageState extends State<LoginPage> {
                             }
 
                             try {
+                              final emailSafe = email ?? '';
+                              if (emailSafe.isEmpty) {
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(contextSB).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('E-mail inválido'),
+                                  ),
+                                );
+                                return;
+                              }
+
                               final dynamic resp = await client
                                   .from('motoristas')
                                   .select('id')
-                                  .eq('email', email)
+                                  .eq('email', emailSafe)
                                   .maybeSingle();
 
                               if (resp == null) {
-                                try {
-                                  if (!mounted) return;
-                                  ScaffoldMessenger.of(contextSB).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('E-mail não encontrado'),
-                                    ),
-                                  );
-                                } catch (_) {}
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(contextSB).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('E-mail não encontrado'),
+                                  ),
+                                );
                                 return;
                               }
 

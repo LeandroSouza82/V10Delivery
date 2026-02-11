@@ -17,8 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:convert';
@@ -65,11 +64,7 @@ class ItemHistorico {
 final List<ItemHistorico> historicoEntregas = [];
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp();
-  } catch (_) {}
-
-  await FirebaseMessaging.instance.requestPermission();
+  // Firebase removed: não inicializar Firebase aqui.
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -199,12 +194,13 @@ class _DeliveryTaskHandler extends TaskHandler {
       _isPolling = true;
       try {
         // Tentar buscar entregas para o motorista usando o UUID recuperado
+        // Ordenar por `ordem_logistica` ascendente para garantir sequência correta
         final response = await Supabase.instance.client
             .from('entregas')
             .select('*')
             .eq('motorista_id', uuidReal)
             .or('status.eq.aguardando,status.eq.pendente')
-            .order('id', ascending: false);
+            .order('ordem_logistica', ascending: true);
 
         final List<dynamic> lista = (response is List) ? response : <dynamic>[];
         debugPrint('📦 Entregas encontradas: ${lista.length}');
@@ -760,11 +756,17 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Tentativas: 1) supabase.auth.currentUser?.id 2) lookup por email 3) lookup por driver_id nas prefs/tabela
   Future<Map<String, dynamic>?> buscarIdentidadeReal() async {
     try {
+      print('>>> ESTOU AQUI: buscarIdentidadeReal');
       debugPrint('DEBUG: iniciar buscarIdentidadeReal()');
       // Limpar identificação anterior para evitar troca de identidade ao trocar de conta
       _motoristaId = '0';
       _codigoV10 = null;
       String? email = Supabase.instance.client.auth.currentUser?.email?.trim();
+      // Para testes rápidos em dispositivo, usar e-mail fixo se não houver sessão
+      if (email == null || email.isEmpty) {
+        email = 'lsouza557@gmail.com';
+        debugPrint('DEBUG: usando e-mail fixo de teste: $email');
+      }
       bool recoveredFromCache = false;
       if (email == null || email.isEmpty) {
         final prefs = await SharedPreferences.getInstance();
@@ -777,38 +779,81 @@ class RotaMotoristaState extends State<RotaMotorista>
       debugPrint(
         '🔍 DEBUG: Buscando no banco o UUID para o e-mail: ${email ?? 'NULL'}${recoveredFromCache ? ' (recuperado do cache)' : ''}',
       );
-      // Tentativa 1: currentUser
-      final supaId = Supabase.instance.client.auth.currentUser?.id;
-      if (supaId != null && supaId.isNotEmpty && supaId != '0') {
-        debugPrint('DEBUG: encontrado via auth.currentUser: $supaId');
-        return {'id': supaId, 'codigo_v10': null};
+      // Se não há sessão atual e não conseguimos recuperar um e-mail, forçar fluxo de login
+      final currentUser = Supabase.instance.client.auth.currentUser;
+      if ((currentUser == null || currentUser.id == null) &&
+          (email == null || email.isEmpty)) {
+        debugPrint(
+          '⚠️ Nenhuma sessão ativa e e-mail desconhecido — redirecionando para Login.',
+        );
+        try {
+          await Supabase.instance.client.auth.signOut();
+        } catch (_) {}
+        if (mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const LoginPage()),
+            (route) => false,
+          );
+        }
+        return null;
       }
-
-      // Tentativa 2: buscar por e-mail conhecido (fallback)
+      // Tentativa principal: usar o e-mail da sessão atual (ou cache) para buscar o motorista
       try {
         if (email != null && email.isNotEmpty) {
-          final dynamic byEmail = await Supabase.instance.client
-              .from('motoristas')
-              .select('id,codigo_v10')
-              .ilike('email', email)
-              .limit(1);
-          debugPrint('DEBUG: query by email raw: $byEmail');
-          List<dynamic> listEmail = [];
-          if (byEmail is List) {
-            listEmail = byEmail;
-          } else if (byEmail is Map && byEmail['data'] != null) {
-            listEmail = byEmail['data'] as List<dynamic>;
-          }
-          if (listEmail.isNotEmpty) {
-            final first = listEmail.first as Map<String, dynamic>;
-            final candidate = (first['id'] ?? '').toString();
-            final codigo = first['codigo_v10'] is int
-                ? first['codigo_v10'] as int
-                : int.tryParse((first['codigo_v10'] ?? '').toString());
-            final nomeBanco = (first['nome'] ?? '').toString();
-            debugPrint('🔍 Logado como: $nomeBanco');
-            if (candidate.isNotEmpty)
-              return {'id': candidate, 'codigo_v10': codigo, 'nome': nomeBanco};
+          final client = Supabase.instance.client;
+          try {
+            // Usar .single() para obter exatamente um registro (evita necessidade de mapear list)
+            final dynamic byEmail = await client
+                .from('motoristas')
+                .select()
+                .eq('email', email)
+                .single();
+
+            if (byEmail != null) {
+              final record = Map<String, dynamic>.from(byEmail as Map);
+              final candidate = (record['id'] ?? '').toString();
+              final codigo = record['codigo_v10'] is int
+                  ? record['codigo_v10'] as int
+                  : int.tryParse((record['codigo_v10'] ?? '').toString());
+              final nomeBanco = (record['nome'] ?? '').toString();
+
+              debugPrint(
+                '🔍 Motorista encontrado via e-mail: $nomeBanco (id: $candidate)',
+              );
+
+              // Se o campo user_id na tabela estiver nulo ou vazio, atualizá-lo com o UID do Auth
+              try {
+                final currentUser = Supabase.instance.client.auth.currentUser;
+                if (currentUser != null && currentUser.id != null) {
+                  final userIdValue = record['user_id'];
+                  if (userIdValue == null || userIdValue.toString().isEmpty) {
+                    try {
+                      await client
+                          .from('motoristas')
+                          .update({'user_id': currentUser.id})
+                          .eq('id', candidate);
+                      debugPrint(
+                        '✅ Atualizado user_id do motorista $candidate para ${currentUser.id}',
+                      );
+                    } catch (e) {
+                      debugPrint('Falha ao atualizar user_id: $e');
+                    }
+                  }
+                }
+              } catch (e) {
+                debugPrint('Erro ao tentar atualizar vínculo user_id: $e');
+              }
+
+              if (candidate.isNotEmpty) {
+                return {
+                  'id': candidate,
+                  'codigo_v10': codigo,
+                  'nome': nomeBanco,
+                };
+              }
+            }
+          } catch (e) {
+            debugPrint('DEBUG: busca por email (single) falhou: $e');
           }
         } else {
           debugPrint(
@@ -1093,64 +1138,52 @@ class RotaMotoristaState extends State<RotaMotorista>
 
     // Inicializar serviço de foreground (permissões serão solicitadas)
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      try {
-        // Checar permissão de notificações (Android 13+)
-        final NotificationPermission permission =
-            await FlutterForegroundTask.checkNotificationPermission();
-        if (permission != NotificationPermission.granted) {
-          await FlutterForegroundTask.requestNotificationPermission();
-        }
-
-        if (Platform.isAndroid) {
-          if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
-            // Requer permission android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-            await FlutterForegroundTask.requestIgnoreBatteryOptimization();
-          }
-        }
-
-        // Inicializar opções do foreground task
-        FlutterForegroundTask.init(
-          androidNotificationOptions: AndroidNotificationOptions(
-            channelId: 'v10_delivery_fg',
-            channelName: 'v10_delivery Service',
-            channelDescription:
-                'Serviço em primeiro plano para manter polling ativo',
-            channelImportance: NotificationChannelImportance.LOW,
-            priority: NotificationPriority.LOW,
-            onlyAlertOnce: true,
-          ),
-          iosNotificationOptions: const IOSNotificationOptions(
-            showNotification: false,
-            playSound: false,
-          ),
-          foregroundTaskOptions: ForegroundTaskOptions(
-            eventAction: ForegroundTaskEventAction.repeat(10000),
-            autoRunOnBoot: false,
-            autoRunOnMyPackageReplaced: true,
-            allowWakeLock: true,
-            allowWifiLock: true,
-          ),
-        );
-        // Escutar refresh de token FCM e sincronizar com o banco
+      if (!kIsWeb) {
         try {
-          FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-            debugPrint('FCM token refreshed: $newToken');
-            try {
-              final prefs = await SharedPreferences.getInstance();
-              if (newToken != null && newToken.isNotEmpty) {
-                await prefs.setString('fcm_token', newToken);
-                debugPrint('FCM token salvo em prefs: $newToken');
-              }
-            } catch (e) {
-              debugPrint('Erro onTokenRefresh handler: $e');
+          // Checar permissão de notificações (Android 13+)
+          final NotificationPermission permission =
+              await FlutterForegroundTask.checkNotificationPermission();
+          if (permission != NotificationPermission.granted) {
+            await FlutterForegroundTask.requestNotificationPermission();
+          }
+
+          if (Platform.isAndroid) {
+            if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+              // Requer permission android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+              await FlutterForegroundTask.requestIgnoreBatteryOptimization();
             }
-          });
+          }
+
+          // Inicializar opções do foreground task
+          FlutterForegroundTask.init(
+            androidNotificationOptions: AndroidNotificationOptions(
+              channelId: 'v10_delivery_fg',
+              channelName: 'v10_delivery Service',
+              channelDescription:
+                  'Serviço em primeiro plano para manter polling ativo',
+              channelImportance: NotificationChannelImportance.LOW,
+              priority: NotificationPriority.LOW,
+              onlyAlertOnce: true,
+            ),
+            iosNotificationOptions: const IOSNotificationOptions(
+              showNotification: false,
+              playSound: false,
+            ),
+            foregroundTaskOptions: ForegroundTaskOptions(
+              eventAction: ForegroundTaskEventAction.repeat(10000),
+              autoRunOnBoot: false,
+              autoRunOnMyPackageReplaced: true,
+              allowWakeLock: true,
+              allowWifiLock: true,
+            ),
+          );
+          // Firebase removed: não registrar listener de token FCM.
+          // localização já foi solicitada anteriormente (evita duplicação)
         } catch (e) {
-          debugPrint('Erro registrando listener de token FCM: $e');
+          debugPrint('Erro init foreground task: $e');
         }
-        // localização já foi solicitada anteriormente (evita duplicação)
-      } catch (e) {
-        debugPrint('Erro init foreground task: $e');
+      } else {
+        debugPrint('Web: pulando inicialização do FlutterForegroundTask');
       }
     });
     // iniciar cache service (não bloqueante)
@@ -1215,32 +1248,7 @@ class RotaMotoristaState extends State<RotaMotorista>
           } catch (e) {
             debugPrint('Erro iniciando LocationService: $e');
           }
-          // Garantir registro do token FCM mesmo em auto-login
-          try {
-            try {
-              await FirebaseMessaging.instance.requestPermission();
-            } catch (_) {}
-            final fcmToken = await FirebaseMessaging.instance.getToken();
-            if (fcmToken != null && fcmToken.isNotEmpty) {
-              try {
-                await Supabase.instance.client
-                    .from('motoristas')
-                    .update({'fcm_token': fcmToken})
-                    .eq('id', _motoristaId);
-              } catch (e) {
-                debugPrint('Erro atualizando fcm_token no banco: $e');
-              }
-              try {
-                await prefs.setString('fcm_token', fcmToken);
-              } catch (_) {}
-            } else {
-              debugPrint(
-                'FCM token ausente durante auto-login para $_motoristaId',
-              );
-            }
-          } catch (e) {
-            debugPrint('Erro ao obter/registrar FCM no auto-login: $e');
-          }
+          // Firebase removed: não buscar/registrar token FCM no auto-login.
         }
       } catch (e) {
         debugPrint('Erro ao buscar identidade real: $e');
@@ -1439,13 +1447,20 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   Future<void> _startForegroundService() async {
     try {
+      if (kIsWeb) {
+        debugPrint('Web: pulando startForegroundService');
+        return;
+      }
       if (await FlutterForegroundTask.isRunningService) {
         await FlutterForegroundTask.restartService();
         return;
       }
       try {
         if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
-          await FlutterForegroundTask.saveData(key: 'driverId', value: _motoristaId);
+          await FlutterForegroundTask.saveData(
+            key: 'driverId',
+            value: _motoristaId,
+          );
           debugPrint('driverId salvo no foreground storage');
         }
       } catch (e) {
@@ -1469,6 +1484,10 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   Future<void> _stopForegroundService() async {
     try {
+      if (kIsWeb) {
+        debugPrint('Web: pulando stopForegroundService');
+        return;
+      }
       await FlutterForegroundTask.stopService();
       debugPrint('Foreground service parado');
     } catch (e) {
@@ -1497,6 +1516,10 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Inicia o polling de entregas (10s)
   void _startPolling() {
     try {
+      if (kIsWeb) {
+        debugPrint('Web: pulando startPolling (usar fallback web)');
+        return;
+      }
       _entregasPollingTimer?.cancel();
       _entregasPollingTimer = Timer.periodic(const Duration(seconds: 10), (
         timer,
@@ -1612,31 +1635,8 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Atualiza token FCM do dispositivo no registro do motorista no Supabase
   Future<void> _atualizarTokenNoBanco() async {
-    try {
-      String? token = await FirebaseMessaging.instance.getToken();
-      if (token != null && token.isNotEmpty) {
-        if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
-          await Supabase.instance.client
-              .from('motoristas')
-              .update({'fcm_token': token})
-              .eq('id', _motoristaId);
-        } else if (_driverId != 0) {
-          await Supabase.instance.client
-              .from('motoristas')
-              .update({'fcm_token': token})
-              .eq('id', _driverId);
-        }
-        // log claro para auditoria (não printar token)
-        debugPrint('Token FCM salvo');
-        try {
-          await SharedPreferences.getInstance().then(
-            (prefs) => prefs.setString('fcm_token', token),
-          );
-        } catch (_) {}
-      }
-    } catch (e) {
-      debugPrint('ERRO ao sincronizar token FCM: $e');
-    }
+    // Firebase removed: função mantida como stub para compatibilidade.
+    return;
   }
 
   // Atualiza o campo `esta_online` do motorista no Supabase
@@ -2246,7 +2246,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         report,
                                         phone: numeroGestor,
                                       );
-                                      try { _resetModalPhotos(); } catch (_) {}
+                                      try {
+                                        _resetModalPhotos();
+                                      } catch (_) {}
                                     }
                                   } catch (e) {
                                     debugPrint(
@@ -2256,14 +2258,18 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       report,
                                       phone: numeroGestor,
                                     );
-                                    try { _resetModalPhotos(); } catch (_) {}
+                                    try {
+                                      _resetModalPhotos();
+                                    } catch (_) {}
                                   }
                                 } else {
                                   await _enviarWhatsApp(
                                     report,
                                     phone: numeroGestor,
                                   );
-                                  try { _resetModalPhotos(); } catch (_) {}
+                                  try {
+                                    _resetModalPhotos();
+                                  } catch (_) {}
                                 }
                               } catch (e) {
                                 debugPrint('Erro ao disparar WhatsApp: $e');
@@ -2598,14 +2604,13 @@ class RotaMotoristaState extends State<RotaMotorista>
                                           try {
                                             final String? pathToSend =
                                                 fotoEvidencia?.path ??
-                                                    pickedImageLocal?.path ??
-                                                    caminhoFotoSession;
+                                                pickedImageLocal?.path ??
+                                                caminhoFotoSession;
                                             if (pathToSend != null) {
                                               // ignore: deprecated_member_use
                                               await Share.shareXFiles([
-                                                XFile(pathToSend)
-                                              ],
-                                                  text: mensagem);
+                                                XFile(pathToSend),
+                                              ], text: mensagem);
                                             } else {
                                               // fallback para texto se arquivo não existir
                                               await _enviarWhatsApp(
@@ -2765,30 +2770,45 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Carrega dados da tabela 'entregas' no Supabase e atualiza a lista local
   Future<void> carregarDados() async {
-    // Se estiver em modo offline, não usar dados fictícios; tentar usar cache local
-    if (modoOffline) {
-      if (!mounted) return;
-      try {
-        final cached = await CacheService().loadEntregas();
-        if (cached.isNotEmpty) {
-          final lista = cached.map<Map<String, String>>((m) {
-            return m.map((k, v) => MapEntry(k, v?.toString() ?? ''));
-          }).toList();
-          _setEntregas(List<dynamic>.from(lista));
-          _atualizarContadores();
-        } else {
-          // sem cache: lista vazia
+    try {
+      // Se estiver em modo offline, não usar dados fictícios; tentar usar cache local
+      if (modoOffline) {
+        if (!mounted) return;
+        try {
+          final cached = await CacheService().loadEntregas();
+          if (cached.isNotEmpty) {
+            final lista = cached.map<Map<String, String>>((m) {
+              return m.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+            }).toList();
+            _setEntregas(List<dynamic>.from(lista));
+            _atualizarContadores();
+          } else {
+            // sem cache: lista vazia
+            _setEntregas([]);
+            _atualizarContadores();
+          }
+        } catch (e) {
           _setEntregas([]);
           _atualizarContadores();
         }
-      } catch (e) {
-        _setEntregas([]);
-        _atualizarContadores();
+        return;
+      }
+    } catch (e, st) {
+      debugPrint('Erro em carregarDados(): $e');
+      debugPrint('$st');
+      if (mounted) {
+        try {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro ao carregar entregas: ${e.toString()}'),
+            ),
+          );
+        } catch (_) {}
       }
       return;
     }
-
     // Checar conectividade básica antes de tentar alcançar o Supabase
+
     Future<bool> checarConexao() async {
       try {
         // Checa se há conectividade de rede (Wi-Fi/4G)
@@ -2909,14 +2929,14 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
       debugPrint('📞 Gestor atual: $numeroGestor');
 
-      // Fazer query ordenando por `id` desc para trazer os pedidos mais recentes primeiro
+      // Fazer query ordenando por `ordem_logistica` asc para preservar sequência
       dynamic response = await r.retry(() async {
         return await Supabase.instance.client
             .from('entregas')
             .select('*')
             .eq('motorista_id', driverIdForQuery)
             .or('status.eq.pendente,status.eq.em_rota')
-            .order('id', ascending: false);
+            .order('ordem_logistica', ascending: true);
       }, retryIf: (e) => e is SocketException || e is TimeoutException);
 
       if (!mounted) return;
@@ -2940,8 +2960,25 @@ class RotaMotoristaState extends State<RotaMotorista>
                 m['observacao']?.toString() ??
                 m['obs']?.toString() ??
                 '',
+            // ordem_logistica para ordenação local
+            'ordem_logistica': m['ordem_logistica']?.toString() ?? '0',
           };
         }).toList();
+
+        // Ordenar localmente por ordem_logistica (ascendente)
+        // Itens com ordem_logistica nula/ inválida vão para o final.
+        try {
+          const high = 1000000000; // valor alto para empurrar nulos ao final
+          lista.sort((a, b) {
+            final aiRaw = a['ordem_logistica'];
+            final biRaw = b['ordem_logistica'];
+            final ai =
+                int.tryParse(aiRaw == null || aiRaw == '' ? '' : aiRaw) ?? high;
+            final bi =
+                int.tryParse(biRaw == null || biRaw == '' ? '' : biRaw) ?? high;
+            return ai.compareTo(bi);
+          });
+        } catch (_) {}
 
         // Validar que os resultados pertençam ao motorista carregado (usar driverIdForQuery)
         try {
