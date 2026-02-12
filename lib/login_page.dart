@@ -218,7 +218,10 @@ class _LoginPageState extends State<LoginPage> {
         if (!mounted) {
           return;
         }
-        await Navigator.pushReplacementNamed(context, '/rota');
+          await Navigator.pushReplacementNamed(context, '/rota');
+          if (!mounted) {
+            return;
+          }
       }
     } catch (_) {}
   }
