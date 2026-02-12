@@ -85,7 +85,9 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                 idLogado = null;
                 nomeMotorista = '';
               } catch (_) {}
-              if (!mounted) return;
+              if (!mounted) {
+                return;
+              }
               navigator.pushAndRemoveUntil(
                 MaterialPageRoute(builder: (_) => const SplashPage()),
                 (route) => false,

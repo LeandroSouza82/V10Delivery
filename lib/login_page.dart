@@ -4,9 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
 import 'register_page.dart';
-import 'admin_approval_page.dart';
 import 'globals.dart';
-import 'main.dart';
+// Removed direct import of main.dart to avoid circular imports; navigation uses named routes.
 
 const String kLogoPath = 'assets/images/branco.jpg';
 
@@ -15,7 +14,6 @@ Future<void> signInWithGoogleWeb(BuildContext context) async {
   try {
     // A API exata depende da versão do supabase_flutter; usamos signInWithOAuth quando disponível.
     final client = Supabase.instance.client;
-    if (client == null) return;
     try {
       await client.auth.signInWithOAuth(OAuthProvider.google);
     } catch (e) {
@@ -60,7 +58,7 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _login() async {
     // Início do método: ajuda a diagnosticar se o botão está conectado
-    print('>>> ESTOU AQUI: _login');
+    debugPrint('>>> ESTOU AQUI: _login');
     setState(() => _loading = true);
     try {
       // Forçar uso de credenciais fixas para teste (evita dependência dos campos de texto)
@@ -129,7 +127,7 @@ class _LoginPageState extends State<LoginPage> {
         int recId = 0;
         String? recUuid;
         if (rawId is int) {
-          recId = rawId as int;
+          recId = rawId;
         } else if (rawId is String) {
           final s = rawId.toString();
           if (s.contains('-')) {
@@ -161,11 +159,10 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setString('driver_name', nome);
         nomeMotorista = nome;
 
-        if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const RotaMotorista()),
-        );
+        if (!mounted) {
+          return;
+        }
+        Navigator.pushReplacementNamed(context, '/rota');
         return;
       } catch (e) {
         debugPrint('Erro durante busca/autenticação de teste: $e');
@@ -176,7 +173,9 @@ class _LoginPageState extends State<LoginPage> {
         }
       }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -201,7 +200,9 @@ class _LoginPageState extends State<LoginPage> {
       final prefs = await SharedPreferences.getInstance();
       // inicializar estado do checkbox a partir da preferência salva
       final savedKeep = prefs.getBool('manter_logado') ?? false;
-      if (mounted) setState(() => _keep = savedKeep);
+      if (mounted) {
+        setState(() => _keep = savedKeep);
+      }
       // carregar e-mail salvo se houver
       final savedEmail = prefs.getString('email_salvo');
       if (savedEmail != null && savedEmail.isNotEmpty) {
@@ -214,11 +215,10 @@ class _LoginPageState extends State<LoginPage> {
       }
       final id = prefs.getInt('driver_id') ?? 0;
       if (savedKeep && id > 0) {
-        if (!mounted) return;
-        await Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const RotaMotorista()),
-        );
+        if (!mounted) {
+          return;
+        }
+        await Navigator.pushReplacementNamed(context, '/rota');
       }
     } catch (_) {}
   }
@@ -446,7 +446,9 @@ class _LoginPageState extends State<LoginPage> {
                           onPressed: () async {
                             final email = emailCtl.text.trim();
                             if (email.isEmpty) {
-                              if (!mounted) return;
+                              if (!mounted) {
+                                return;
+                              }
                               ScaffoldMessenger.of(contextSB).showSnackBar(
                                 const SnackBar(
                                   content: Text('Preencha o e-mail'),
@@ -456,9 +458,11 @@ class _LoginPageState extends State<LoginPage> {
                             }
 
                             try {
-                              final emailSafe = email ?? '';
+                              final emailSafe = email;
                               if (emailSafe.isEmpty) {
-                                if (!mounted) return;
+                                if (!mounted) {
+                                  return;
+                                }
                                 ScaffoldMessenger.of(contextSB).showSnackBar(
                                   const SnackBar(
                                     content: Text('E-mail inválido'),
@@ -474,7 +478,9 @@ class _LoginPageState extends State<LoginPage> {
                                   .maybeSingle();
 
                               if (resp == null) {
-                                if (!mounted) return;
+                                if (!mounted) {
+                                  return;
+                                }
                                 ScaffoldMessenger.of(contextSB).showSnackBar(
                                   const SnackBar(
                                     content: Text('E-mail não encontrado'),
@@ -489,7 +495,9 @@ class _LoginPageState extends State<LoginPage> {
                               } catch (_) {}
                             } catch (e) {
                               try {
-                                if (!mounted) return;
+                                if (!mounted) {
+                                  return;
+                                }
                                 ScaffoldMessenger.of(contextSB).showSnackBar(
                                   SnackBar(
                                     content: Text('Erro: ${e.toString()}'),
@@ -504,7 +512,9 @@ class _LoginPageState extends State<LoginPage> {
                         TextButton(
                           onPressed: () {
                             try {
-                              if (!mounted) return;
+                              if (!mounted) {
+                                return;
+                              }
                               Navigator.of(ctx).pop();
                             } catch (_) {}
                           },
@@ -566,7 +576,9 @@ class _LoginPageState extends State<LoginPage> {
                             final s2 = confirmaCtl.text;
                             final emailDigitado = emailCtl.text.trim();
                             if (s1.isEmpty || s2.isEmpty) {
-                              if (!mounted) return;
+                              if (!mounted) {
+                                return;
+                              }
                               ScaffoldMessenger.of(contextSB).showSnackBar(
                                 const SnackBar(
                                   content: Text('Preencha ambas as senhas'),
@@ -575,7 +587,9 @@ class _LoginPageState extends State<LoginPage> {
                               return;
                             }
                             if (s1 != s2) {
-                              if (!mounted) return;
+                              if (!mounted) {
+                                return;
+                              }
                               ScaffoldMessenger.of(contextSB).showSnackBar(
                                 const SnackBar(
                                   content: Text('Senhas não coincidem'),
@@ -591,13 +605,17 @@ class _LoginPageState extends State<LoginPage> {
                                   .eq('email', emailDigitado);
 
                               try {
-                                if (!mounted) return;
+                                if (!mounted) {
+                                  return;
+                                }
                                 // fechar o bottom sheet antes de qualquer diálogo
                                 Navigator.of(ctx).pop();
                               } catch (_) {}
 
                               try {
-                                if (!mounted) return;
+                                if (!mounted) {
+                                  return;
+                                }
                                 // mostrar diálogo de sucesso usando o contexto pai
                                 await showDialog<void>(
                                   context: parentContext,
@@ -610,7 +628,9 @@ class _LoginPageState extends State<LoginPage> {
                                       TextButton(
                                         onPressed: () {
                                           try {
-                                            if (!mounted) return;
+                                            if (!mounted) {
+                                              return;
+                                            }
                                             Navigator.of(dctx).pop();
                                           } catch (_) {}
                                         },
@@ -622,7 +642,9 @@ class _LoginPageState extends State<LoginPage> {
                               } catch (_) {}
 
                               try {
-                                if (!mounted) return;
+                                if (!mounted) {
+                                  return;
+                                }
                                 // após o diálogo, retornar à rota inicial
                                 Navigator.of(
                                   parentContext,
@@ -630,7 +652,9 @@ class _LoginPageState extends State<LoginPage> {
                               } catch (_) {}
                             } catch (e) {
                               try {
-                                if (!mounted) return;
+                                if (!mounted) {
+                                  return;
+                                }
                                 ScaffoldMessenger.of(contextSB).showSnackBar(
                                   SnackBar(
                                     content: Text(
@@ -646,7 +670,9 @@ class _LoginPageState extends State<LoginPage> {
                         const SizedBox(height: 8),
                         TextButton(
                           onPressed: () {
-                            if (!mounted) return;
+                            if (!mounted) {
+                              return;
+                            }
                             Navigator.of(ctx).pop();
                           },
                           child: const Text('Cancelar'),
