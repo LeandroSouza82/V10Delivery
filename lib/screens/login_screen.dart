@@ -9,23 +9,7 @@ import 'package:v10_delivery/globals.dart';
 
 const String kLogoPath = 'assets/images/branco.jpg';
 
-/// Adapter local para chamadas de autenticação — mantém a alteração cirúrgica
-/// dentro deste arquivo sem expor mudanças ao restante do código.
-class _SupabaseAdapter {
-  const _SupabaseAdapter();
-
-  Future<void> login(String email, String password) async {
-    try {
-      await SupabaseService.client.auth.signInWithPassword(
-        email: email,
-        password: password,
-      );
-    } catch (e) {
-      debugPrint(e.toString());
-      rethrow;
-    }
-  }
-}
+// autenticação agora centralizada em `SupabaseService`
 
 Future<void> signInWithGoogleWeb(BuildContext context) async {
   try {
@@ -52,7 +36,6 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _supabaseService = const _SupabaseAdapter();
   final _emailCtl = TextEditingController();
   final _passCtl = TextEditingController();
   final TextEditingController _resetEmailCtl = TextEditingController();
@@ -75,7 +58,7 @@ class _LoginPageState extends State<LoginPage> {
       debugPrint('Iniciando tentativa de login com e-mail fixo para teste');
 
       try {
-        await _supabaseService.login(testEmail, testPass);
+        await SupabaseService.login(testEmail, testPass);
         debugPrint('Auth: signInWithPassword executado (sem exceção)');
       } catch (e) {
         debugPrint(e.toString());
