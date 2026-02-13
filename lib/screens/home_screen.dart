@@ -506,9 +506,11 @@ class RotaMotoristaState extends State<RotaMotorista>
   Widget build(BuildContext context) {
     // Minimal placeholder UI to keep the screen functional after migration.
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: const Color(0xFF001529),
       appBar: AppBar(
-        title: const Text('Rota Motorista'),
+        backgroundColor: const Color(0xFF001529),
+        foregroundColor: Colors.white,
+        title: const Text('V10 Delivery', style: TextStyle(color: Colors.white)),
         actions: [
           IconButton(
             tooltip: 'Suporte (WhatsApp)',
@@ -566,7 +568,8 @@ class RotaMotoristaState extends State<RotaMotorista>
             Expanded(
               child: entregas.isEmpty
                   ? const Center(child: Text('Nenhuma entrega pendente'))
-                  : ListView.builder(
+                    : ListView.builder(
+                      padding: const EdgeInsets.all(16),
                       itemCount: entregas.length,
                       itemBuilder: (ctx, idx) {
                         final e = entregas[idx];
