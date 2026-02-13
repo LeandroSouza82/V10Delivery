@@ -506,9 +506,9 @@ class RotaMotoristaState extends State<RotaMotorista>
   Widget build(BuildContext context) {
     // Minimal placeholder UI to keep the screen functional after migration.
     return Scaffold(
-      backgroundColor: const Color(0xFF001529),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF001529),
+        backgroundColor: AppColors.background,
         foregroundColor: Colors.white,
         title: const Text('V10 Delivery', style: TextStyle(color: Colors.white)),
         actions: [
