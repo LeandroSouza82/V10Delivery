@@ -121,5 +121,35 @@ class SupabaseService {
     }
   }
 
+  /// Salva um relatório de entrega na tabela `relatorios_entrega`.
+  /// Campos esperados: cliente, endereco, recebido_por, numero, observacoes, entregador, horario, motorista_id
+  static Future<void> saveDeliveryReport({
+    required String cliente,
+    required String endereco,
+    required String recebidoPor,
+    String? numero,
+    String? observacoes,
+    required String entregador,
+    required String horario,
+    String? motoristaId,
+  }) async {
+    try {
+      await client.from('relatorios_entrega').insert({
+        'cliente': cliente,
+        'endereco': endereco,
+        'recebido_por': recebidoPor,
+        'numero': numero ?? '',
+        'observacoes': observacoes ?? '',
+        'entregador': entregador,
+        'horario': horario,
+        'motorista_id': motoristaId ?? '',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      debugPrint('Erro ao salvar relatorio no Supabase: ${e.toString()}');
+      rethrow;
+    }
+  }
+
   // Centraliza a lógica de banco (queries, realtime, auth helpers)
 }

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 // supabase import not used here; splash uses prefs only
 import 'home_page.dart';
-import 'login_page.dart';
+import 'package:v10_delivery/screens/login_screen.dart';
 
 class SplashPage extends StatefulWidget {
   const SplashPage({super.key});

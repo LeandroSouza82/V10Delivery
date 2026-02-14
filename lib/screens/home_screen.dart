@@ -5,11 +5,16 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:map_launcher/map_launcher.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:v10_delivery/core/app_styles.dart';
+import 'package:v10_delivery/globals.dart';
 import 'package:v10_delivery/core/app_colors.dart';
 import 'package:v10_delivery/core/constants.dart';
 import 'package:v10_delivery/core/utils.dart';
-import 'package:v10_delivery/services/location_service.dart';
+ 
+import 'package:v10_delivery/widgets/dashboard_stats.dart';
+import 'package:v10_delivery/widgets/delivery_card.dart';
+import 'package:v10_delivery/widgets/top_header.dart';
 
 class RotaMotorista extends StatefulWidget {
   const RotaMotorista({super.key});
@@ -29,8 +34,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _searchingActive = false;
   bool _awaitStartChama = false;
-  final LocationService _locationService = LocationService();
-  bool _online = false;
+  
 
   List<Map<String, String>> entregas = [
     {
@@ -77,11 +81,13 @@ class RotaMotoristaState extends State<RotaMotorista>
   int recolhasFaltam = 0;
   int outrosFaltam = 0;
   String? _selectedMapName;
+  String _currentFilter = 'all';
 
   @override
   void initState() {
     super.initState();
     _atualizarContadores();
+    _loadDriverUuidFromPrefs();
 
     _buscarController = AnimationController(
       vsync: this,
@@ -110,6 +116,22 @@ class RotaMotoristaState extends State<RotaMotorista>
         setState(() => _selectedMapName = mapName);
       }
     });
+  }
+
+  Future<void> _loadDriverUuidFromPrefs() async {
+    try {
+      if (idLogado == null) {
+        final prefs = await SharedPreferences.getInstance();
+        final uuid = prefs.getString('driver_uuid');
+        if (uuid != null && uuid.isNotEmpty) {
+          setState(() {
+            idLogado = uuid;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Erro ao carregar driver_uuid: $e');
+    }
   }
 
   @override
@@ -207,31 +229,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     String endereco,
     String motivoFinal,
   ) async {
-    final hora = DateFormat('HH:mm').format(DateTime.now());
-    final hasPhoto = imagemFalha != null;
-
-    final report =
-        '❌ *RELATÓRIO DE FALHA*\n'
-        'Status: Não Realizada\n'
-        'Motivo: $motivoFinal\n'
-        'Cliente: $cliente\n'
-        'Endereço: $endereco\n'
-        'Motorista: LEANDRO\n'
-        'Foto: ${hasPhoto ? '✅' : '❌'}\n'
-        'Hora: $hora';
-
-    final wa = Uri.parse(
-      'https://api.whatsapp.com/send?phone=$numeroGestor&text=${Uri.encodeComponent(report)}',
-    );
-
-    try {
-      if (await canLaunchUrl(wa)) {
-        await launchUrl(wa, mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      debugPrint(e.toString());
-    }
-
+    // Nota: envio do WhatsApp agora é tratado pelo FailureConfirmationModal.
     try {
       await _pararAudio();
     } catch (e) {
@@ -256,12 +254,6 @@ class RotaMotoristaState extends State<RotaMotorista>
     if (!mounted) return;
     final navigator = Navigator.of(context);
     navigator.pop();
-  }
-
-  Future<void> _salvarMapaSelecionado(String mapName) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(prefSelectedMapKey, mapName);
-    setState(() => _selectedMapName = mapName);
   }
 
   // ignore: unused_element
@@ -463,98 +455,15 @@ class RotaMotoristaState extends State<RotaMotorista>
     }
   }
 
-  Future<void> _abrirPreferenciasMapa() async {
-    try {
-      final available = await MapLauncher.installedMaps;
-      if (!mounted) return;
-
-      showModalBottomSheet(
-        context: context,
-        builder: (ctx) {
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  title: const Text('Usar mapa web (Google Maps)'),
-                  onTap: () {
-                    _salvarMapaSelecionado('google_maps');
-                    Navigator.of(ctx).pop();
-                  },
-                ),
-                ...available.map((m) {
-                  return ListTile(
-                    leading: const Icon(Icons.map),
-                    title: Text(m.mapName),
-                    onTap: () {
-                      _salvarMapaSelecionado(m.mapName);
-                      Navigator.of(ctx).pop();
-                    },
-                  );
-                }),
-              ],
-            ),
-          );
-        },
-      );
-    } catch (e) {
-      debugPrint(e.toString());
-    }
-  }
+  
 
   @override
   Widget build(BuildContext context) {
+    debugPrint('ID Logado atual: $idLogado');
     // Minimal placeholder UI to keep the screen functional after migration.
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
-        backgroundColor: AppColors.background,
-        foregroundColor: Colors.white,
-        title: const Text('V10 Delivery', style: TextStyle(color: Colors.white)),
-        actions: [
-          IconButton(
-            tooltip: 'Suporte (WhatsApp)',
-            icon: const Icon(Icons.chat),
-            onPressed: () async {
-              final mensagem = 'Olá, preciso de suporte na rota.';
-              try {
-                await enviarWhatsApp(mensagem, phone: numeroGestor);
-              } catch (e) {
-                debugPrint('Erro enviarWhatsApp: ${e.toString()}');
-              }
-            },
-          ),
-          IconButton(
-            tooltip: 'Preferências de mapa',
-            icon: const Icon(Icons.map),
-            onPressed: _abrirPreferenciasMapa,
-          ),
-          IconButton(
-            tooltip: 'Ficar Online',
-            icon: Icon(_online ? Icons.power : Icons.power_off),
-            onPressed: () async {
-              try {
-                final prefs = await SharedPreferences.getInstance();
-                final motoristaUuid =
-                    prefs.getString('driver_uuid') ??
-                    prefs.getInt('driver_id')?.toString() ??
-                    '0';
-                if (!_online) {
-                  _locationService.iniciarRastreio(motoristaUuid);
-                  setState(() => _online = true);
-                  debugPrint('Iniciando rastreio para $motoristaUuid');
-                } else {
-                  _locationService.pararRastreio();
-                  setState(() => _online = false);
-                  debugPrint('Parando rastreio');
-                }
-              } catch (e) {
-                debugPrint('Erro ao alternar online: ${e.toString()}');
-              }
-            },
-          ),
-        ],
-      ),
+      appBar: const TopHeader(),
       body: Padding(
         padding: const EdgeInsets.all(12.0),
         child: Column(
@@ -565,154 +474,104 @@ class RotaMotoristaState extends State<RotaMotorista>
               style: AppStyles.white70,
             ),
             const SizedBox(height: 8),
-            Expanded(
-              child: entregas.isEmpty
-                  ? const Center(child: Text('Nenhuma entrega pendente'))
-                    : ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: entregas.length,
-                      itemBuilder: (ctx, idx) {
-                        final e = entregas[idx];
-                        final cliente = e['cliente'] ?? '-';
-                        final endereco = e['endereco'] ?? '-';
-                        final id = e['id'] ?? '';
-                        final tipoRaw = (e['tipo'] ?? '').toString().toLowerCase();
-                        final Color borderColor = tipoRaw.contains('entrega')
-                            ? AppColors.primary
-                            : tipoRaw.contains('recolha')
-                                ? Colors.orange
-                                : Colors.purpleAccent;
 
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 8),
-                          color: Colors.white,
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                            side: BorderSide(color: borderColor, width: 3),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(12.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Container(
-                                      width: 28,
-                                      height: 28,
-                                      decoration: BoxDecoration(
-                                        color: borderColor,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Center(
-                                        child: Text(
-                                          id.toString(),
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Text(
-                                        cliente,
-                                        style: AppStyles.modalTitle.copyWith(
-                                            color: AppColors.text),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  endereco,
-                                  style: TextStyle(
-                                    color: AppColors.text,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  children: [
-                                    ElevatedButton(
-                                      onPressed: () =>
-                                          _buildSuccessModal(ctx, cliente),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.green,
-                                      ),
-                                      child: const Text('Entregue'),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    ElevatedButton(
-                                      onPressed: () async {
-                                        final motivoCtl =
-                                            TextEditingController();
-                                        final confirmed = await showDialog<bool>(
-                                          context: ctx,
-                                          builder: (dctx) {
-                                            return AlertDialog(
-                                              title: const Text(
-                                                'Reportar Falha',
-                                              ),
-                                              content: TextField(
-                                                controller: motivoCtl,
-                                                decoration:
-                                                    const InputDecoration(
-                                                  labelText: 'Motivo (opcional)',
-                                                ),
-                                              ),
-                                              actions: [
-                                                TextButton(
-                                                  onPressed: () =>
-                                                      Navigator.of(dctx).pop(false),
-                                                  child: const Text('Cancelar'),
-                                                ),
-                                                TextButton(
-                                                  onPressed: () =>
-                                                      Navigator.of(dctx).pop(true),
-                                                  child: const Text('Enviar'),
-                                                ),
-                                              ],
-                                            );
-                                          },
-                                        );
-                                        if (confirmed == true) {
-                                          final motivo =
-                                              motivoCtl.text.isNotEmpty
-                                                  ? motivoCtl.text
-                                                  : 'Não foi possível realizar a entrega';
-                                          try {
-                                            await _enviarFalha(
-                                              id,
-                                              cliente,
-                                              endereco,
-                                              motivo,
-                                            );
-                                          } catch (e) {
-                                            debugPrint(
-                                              'Erro ao enviar falha: ${e.toString()}',
-                                            );
-                                          }
-                                        }
-                                      },
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.redAccent,
-                                      ),
-                                      child: const Text('Falha'),
-                                    ),
-                                  ],
-                                ),
-                              ],
+            // Stream fornece tanto os dados da lista quanto os contadores para os cards
+            Expanded(
+              child: StreamBuilder<List<Map<String, dynamic>>>(
+                stream: Supabase.instance.client
+                    .from('entregas')
+                    .stream(primaryKey: ['id'])
+                    .order('ordem_logistica'),
+                builder: (ctx, snap) {
+                if (snap.hasError) {
+                  return Center(
+                    child: Text(
+                      'Erro ao carregar entregas',
+                      style: AppStyles.white,
+                    ),
+                  );
+                }
+
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  );
+                }
+
+                final rows = snap.hasData
+                    ? (snap.data ?? <Map<String, dynamic>>[])
+                    : <Map<String, dynamic>>[];
+
+                // Sem filtros: mostrar todas as linhas retornadas pelo stream
+                final active = rows;
+
+                final totalEntregas = active
+                  .where((e) => (e['tipo'] ?? '').toString().toLowerCase().contains('entrega'))
+                  .length;
+                final totalRecolha = active
+                  .where((e) => (e['tipo'] ?? '').toString().toLowerCase().contains('recolha'))
+                  .length;
+                final totalOutros = (active.length - totalEntregas - totalRecolha).clamp(0, active.length);
+
+                // Aplicar filtro selecionado pelos cards
+                final displayList = (_currentFilter == 'all')
+                    ? active
+                    : active.where((e) {
+                        final tipo = (e['tipo'] ?? '').toString().toLowerCase();
+                        if (_currentFilter == 'entrega') return tipo.contains('entrega');
+                        if (_currentFilter == 'recolha') return tipo.contains('recolha');
+                        if (_currentFilter == 'outros') return !tipo.contains('entrega') && !tipo.contains('recolha');
+                        return true;
+                      }).toList();
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    DashboardStats(
+                      entregasCount: totalEntregas,
+                      recolhasCount: totalRecolha,
+                      outrosCount: totalOutros,
+                      onSelectEntregas: () => setState(() => _currentFilter = 'entrega'),
+                      onSelectRecolha: () => setState(() => _currentFilter = 'recolha'),
+                      onSelectOutros: () => setState(() => _currentFilter = 'outros'),
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: displayList.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'Nenhuma entrega disponível',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                              ),
+                            )
+                          : ListView.builder(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: displayList.length,
+                              itemBuilder: (ctx, idx) {
+                                final item = displayList[idx];
+                                final cardData = <String, String>{
+                                  'id': item['id']?.toString() ?? '',
+                                  'cliente': item['cliente']?.toString() ?? '',
+                                  'endereco': item['endereco']?.toString() ?? '',
+                                  'tipo': item['tipo']?.toString() ?? '',
+                                  'obs': item['obs']?.toString() ?? '',
+                                  'status': item['status']?.toString() ?? '',
+                                };
+
+                                return DeliveryCard(
+                                  data: cardData,
+                                  index: idx,
+                                  onConfirmDelivery: _buildSuccessModal,
+                                  onReportFailure: _enviarFalha,
+                                );
+                              },
                             ),
-                          ),
-                        );
-                      },
-                    ), // ListView.builder
-            ), // Expanded
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
           ], // Column children
         ), // Column
       ), // Padding

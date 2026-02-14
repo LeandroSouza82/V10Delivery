@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:v10_delivery/services/supabase_service.dart';
 
 typedef BuscarAvisos = Future<List<Map<String, dynamic>>> Function();
 typedef AtualizarAvisos = Future<void> Function();
@@ -120,10 +120,10 @@ void showAvisosModal({
                                   try {
                                     final id = a['id'];
                                     final novo = !isLida;
-                                    await Supabase.instance.client
-                                        .from('avisos_gestor')
-                                        .update({'lida': novo})
-                                        .eq('id', id);
+                                    await SupabaseService.toggleAvisoLido(
+                                      id,
+                                      novo,
+                                    );
                                     setModalState(
                                       () => futureAvisos = buscarAvisos(),
                                     );

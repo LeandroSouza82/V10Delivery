@@ -1,11 +1,10 @@
 import 'package:geolocator/geolocator.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter/foundation.dart';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'supabase_service.dart';
 
 class LocationService {
-  StreamSubscription? _positionSubscription;
-  final _supabase = Supabase.instance.client;
+  StreamSubscription<Position>? _positionSubscription;
 
   void iniciarRastreio(String motoristaUuid) {
     if (motoristaUuid == '0' || motoristaUuid.isEmpty) return;
@@ -18,16 +17,11 @@ class LocationService {
           ),
         ).listen((Position position) async {
           try {
-            await _supabase
-                .from('motoristas')
-                .update({
-                  'lat': position.latitude.toString(),
-                  'lng': position.longitude.toString(),
-                  'status': 'disponivel',
-                  'esta_online': true,
-                  'ultima_atualizacao': DateTime.now().toIso8601String(),
-                })
-                .eq('id', motoristaUuid);
+            await SupabaseService.updateMotoristaLocation(
+              motoristaUuid,
+              position.latitude,
+              position.longitude,
+            );
             debugPrint('✅ GPS: Posição enviada para UUID: $motoristaUuid');
             debugPrint(
               '🚀 BANCO: Status atualizado para DISPONIVEL e coordenadas enviadas.',
@@ -40,5 +34,6 @@ class LocationService {
 
   void pararRastreio() {
     _positionSubscription?.cancel();
+    _positionSubscription = null;
   }
 }

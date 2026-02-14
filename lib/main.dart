@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'services/supabase_service.dart';
 import 'core/app_colors.dart';
@@ -9,9 +9,18 @@ import 'screens/login_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load environment from .env
-  await dotenv.load(fileName: '.env');
-  await SupabaseService.initializeFromEnv();
+  // Trava a orientação em modo retrato apenas
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+
+  try {
+    await dotenv.load(fileName: '.env');
+    await SupabaseService.initializeFromEnv();
+  } catch (e) {
+    debugPrint('ERRO CRITICO NA INICIALIZACAO: $e');
+  }
 
   runApp(const V10DeliveryApp());
 }

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'login_page.dart';
+import 'package:v10_delivery/services/supabase_service.dart';
+import 'package:v10_delivery/screens/login_screen.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -63,29 +63,21 @@ class _RegisterPageState extends State<RegisterPage> {
       final senha = _senha.text;
 
       // Inserir diretamente na tabela `motoristas` com acesso = 'pendente'
-      final response =
-          await Supabase.instance.client.from('motoristas').insert({
-            'nome': nome,
-            'sobrenome': sobrenome,
-            'cpf': cpfRaw,
-            'telefone': telefoneRaw,
-            'email': email,
-            'senha': senha,
-            'acesso': 'pendente',
-          }).select();
+      final response = await SupabaseService.signUpMotorista(
+        nome: nome,
+        sobrenome: sobrenome,
+        cpf: cpfRaw,
+        telefone: telefoneRaw,
+        email: email,
+        senha: senha,
+      );
 
-      // Determinar se houve inserção sem depender de checagens de tipo explícitas
+      // Determinar se houve inserção
       bool wasInserted = false;
-      try {
-        final listResp = response as List<dynamic>;
-        wasInserted = listResp.isNotEmpty;
-      } catch (_) {
-        try {
-          final mapResp = response as Map<String, dynamic>;
-          wasInserted = mapResp.isNotEmpty;
-        } catch (_) {
-          wasInserted = false;
-        }
+      if (response is List) {
+        wasInserted = response.isNotEmpty;
+      } else if (response is Map) {
+        wasInserted = response.isNotEmpty;
       }
 
       if (wasInserted) {

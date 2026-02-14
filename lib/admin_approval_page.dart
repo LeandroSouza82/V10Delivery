@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:v10_delivery/services/supabase_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'splash_page.dart';
 import 'globals.dart';
@@ -21,25 +21,12 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
   }
 
   Future<List<Map<String, dynamic>>> _fetchPendentes() async {
-    final client = Supabase.instance.client;
-    final dynamic q = await client
-        .from('motoristas')
-        .select('id,nome,cpf,email,telefone')
-        .eq('acesso', 'pendente')
-        .order('created_at', ascending: true);
-    if (q is List) {
-      return List<Map<String, dynamic>>.from(q.cast<Map<String, dynamic>>());
-    }
-    return <Map<String, dynamic>>[];
+    return await SupabaseService.fetchPendingMotoristas();
   }
 
   Future<void> _approve(int id) async {
     try {
-      final client = Supabase.instance.client;
-      await client
-          .from('motoristas')
-          .update({'acesso': 'aprovado'})
-          .eq('id', id);
+      await SupabaseService.approveMotorista(id);
       // res may be a list or map; we consider success if no error thrown
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

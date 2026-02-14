@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'login_page.dart';
+import 'package:v10_delivery/screens/login_screen.dart';
 
 class AuthPageClean extends StatelessWidget {
   const AuthPageClean({super.key});

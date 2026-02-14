@@ -10,37 +10,15 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import 'package:map_launcher/map_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:io';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:v10_delivery/core/app_styles.dart';
+import 'package:v10_delivery/core/utils.dart';
 
-// Número do gestor (formato internacional sem +). Configure aqui.
-const String numeroGestor = '5548996525008';
 const String prefSelectedMapKey = 'selected_map_app';
 
-// Modelo simples para histórico de entregas
-class ItemHistorico {
-	final String nomeCliente;
-	final String horario;
-	final String status;
-	final String? motivo;
-	final String? caminhoFoto;
-	final String? caminhoAssinatura;
-
-	ItemHistorico({
-		required this.nomeCliente,
-		required this.horario,
-		required this.status,
-		this.motivo,
-		this.caminhoFoto,
-		this.caminhoAssinatura,
-	});
-}
-
-final List<ItemHistorico> historicoEntregas = [];
+// Modelos movidos para lib/models/item_historico.dart
 
 Future<void> main() async {
 	WidgetsFlutterBinding.ensureInitialized();
@@ -62,46 +40,7 @@ class V10DeliveryApp extends StatelessWidget {
 	}
 }
 
-Future<void> _enviarWhatsApp(String mensagem, {String? phone}) async {
-	// Construir Uri com `Uri` para garantir codificação correta
-	Uri uri;
-	if (phone != null && phone.isNotEmpty) {
-		uri = Uri.https('api.whatsapp.com', '/send', {
-			'phone': phone,
-			'text': mensagem,
-		});
-	} else {
-		uri = Uri.https('api.whatsapp.com', '/send', {'text': mensagem});
-	}
-
-	try {
-		if (await canLaunchUrl(uri)) {
-			await launchUrl(uri, mode: LaunchMode.externalApplication);
-			return;
-		}
-	} catch (_) {}
-
-	// fallback para esquema nativo do WhatsApp
-	try {
-		Uri whatsapp;
-		if (phone != null && phone.isNotEmpty) {
-			whatsapp = Uri(
-				scheme: 'whatsapp',
-				host: 'send',
-				queryParameters: {'phone': phone, 'text': mensagem},
-			);
-		} else {
-			whatsapp = Uri(
-				scheme: 'whatsapp',
-				host: 'send',
-				queryParameters: {'text': mensagem},
-			);
-		}
-		if (await canLaunchUrl(whatsapp)) {
-			await launchUrl(whatsapp, mode: LaunchMode.externalApplication);
-		}
-	} catch (_) {}
-}
+// Função `enviarWhatsApp` movida para `lib/core/utils.dart`.
 
 class RotaMotorista extends StatefulWidget {
 	const RotaMotorista({super.key});
@@ -117,12 +56,8 @@ class RotaMotoristaState extends State<RotaMotorista>
 	String? caminhoFotoSession;
 	XFile? fotoEvidencia;
 	late AnimationController _buscarController;
-	late Animation<double> _buscarOpacity;
 	bool modoDia = false;
-	int _esquemaCores = 0; // 0 = padrão, 1/2/3 = esquemas
 	// histórico de itens finalizados (usar historicoEntregas global)
-	// Índices dos cards que estão sendo pressionados (efeito visual)
-	final Set<int> _pressedIndices = {};
 
 	// Áudio: usar única instância para evitar consumo excessivo de memória
 	final AudioPlayer _audioPlayer = AudioPlayer();
@@ -394,17 +329,17 @@ class RotaMotoristaState extends State<RotaMotorista>
 			isScrollControlled: true,
 			backgroundColor: Colors.blueGrey[900],
 			shape: RoundedRectangleBorder(
-				borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+				borderRadius: AppRadius.modalTop,
 			),
 			builder: (context) {
 				return StatefulBuilder(
 					builder: (context, setModalState) {
 						return Padding(
 							padding: EdgeInsets.only(
-								left: 20,
-								right: 20,
-								top: 20,
-								bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+								left: AppSpacing.s20,
+								right: AppSpacing.s20,
+								top: AppSpacing.s20,
+								bottom: MediaQuery.of(context).viewInsets.bottom + AppSpacing.s20,
 							),
 							child: SingleChildScrollView(
 								child: Column(
@@ -413,19 +348,15 @@ class RotaMotoristaState extends State<RotaMotorista>
 									children: [
 										Text(
 											'CONFIRMAR ENTREGA',
-											style: TextStyle(
-												fontSize: 20,
-												fontWeight: FontWeight.bold,
-												color: Colors.white,
-											),
+											style: AppStyles.modalTitle,
 											textAlign: TextAlign.center,
 										),
-										SizedBox(height: 12),
+										const SizedBox(height: AppSpacing.s12),
 										Text(
 											'Como foi entregue? (selecione uma opção)',
-											style: TextStyle(color: Colors.white70),
+											style: AppStyles.white70,
 										),
-										SizedBox(height: 12),
+										const SizedBox(height: AppSpacing.s12),
 										Wrap(
 											spacing: 8,
 											runSpacing: 8,
@@ -439,85 +370,85 @@ class RotaMotoristaState extends State<RotaMotorista>
 													}),
 													selectedColor: Colors.blueGrey[700],
 													backgroundColor: Colors.white10,
-													labelStyle: TextStyle(color: Colors.white),
+													labelStyle: AppStyles.chipLabelWhite,
 												);
 											}).toList(),
 										),
-										SizedBox(height: 12),
+										const SizedBox(height: AppSpacing.s12),
 										TextField(
 											decoration: InputDecoration(
 												labelText: 'Observações (opcional)',
 												filled: true,
 												fillColor: Colors.white10,
 												border: OutlineInputBorder(),
-												labelStyle: TextStyle(color: Colors.white70),
+												labelStyle: AppStyles.white70,
 											),
-											style: TextStyle(color: Colors.white),
+											style: AppStyles.inputTextWhite,
 											onChanged: (v) => setModalState(() => obsTexto = v),
 											maxLines: 3,
 										),
-										SizedBox(height: 16),
+										const SizedBox(height: AppSpacing.s16),
 										ElevatedButton(
 											onPressed: opcaoSelecionada == null
-													? null
-													: () async {
-															final navigator = Navigator.of(ctx);
-															await _audioPlayer.stop();
-															await _tocarSomSucesso();
-															await Future.delayed(Duration(milliseconds: 500));
+												? null
+												: () async {
+														final navigator = Navigator.of(ctx);
+														await _audioPlayer.stop();
+														await _tocarSomSucesso();
+														await Future.delayed(Duration(milliseconds: 500));
 
-															final hora = DateFormat(
-																'HH:mm',
-															).format(DateTime.now());
-															final mensagem =
-																	'📦 ENTREGA: $nomeCliente\nStatus: $opcaoSelecionada\nObservações: ${obsTexto.isNotEmpty ? obsTexto : '-'}\nMotorista: $nomeMotorista\nHora: $hora';
+														final hora = DateFormat(
+															'HH:mm',
+														).format(DateTime.now());
+														final mensagem =
+															'📦 ENTREGA: $nomeCliente\nStatus: $opcaoSelecionada\nObservações: ${obsTexto.isNotEmpty ? obsTexto : '-'}\nMotorista: $nomeMotorista\nHora: $hora';
 
+														try {
+														// Tocar som de sucesso ao confirmar entrega
+														try {
+															await _audioPlayer.setVolume(1.0);
+															// IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
+															// serem registrados em pubspec.yaml. Evite alterar esse caminho.
+															await _audioPlayer.play(AssetSource('audios/sucesso.mp3'));
+														} catch (_) {}
+														await Future.delayed(Duration(milliseconds: 500));
+														await enviarWhatsApp(
+															mensagem,
+															phone: numeroGestor,
+														);
+													} catch (_) {}
+
+														final idx = entregas.indexWhere(
+															(e) => (e['cliente'] ?? '') == nomeCliente,
+														);
+														if (idx != -1) {
+															setState(() {
+																entregas.removeAt(idx);
+																_atualizarContadores();
+															});
+														}
+
+														// Se não há mais entregas, tocar som de rota concluída
+														if (entregas.isEmpty) {
 															try {
-																// Tocar som de sucesso ao confirmar entrega
-																try {
-																	await _audioPlayer.setVolume(1.0);
-																	// IMPORTANTE: arquivos de áudio devem ficar em assets/audios/ e
-																	// serem registrados em pubspec.yaml. Evite alterar esse caminho.
-																	await _audioPlayer.play(AssetSource('audios/sucesso.mp3'));
-																} catch (_) {}
-																await Future.delayed(Duration(milliseconds: 500));
-																await _enviarWhatsApp(
-																	mensagem,
-																	phone: numeroGestor,
-																);
+																await _tocarSomRotaConcluida();
 															} catch (_) {}
+														}
 
-															final idx = entregas.indexWhere(
-																(e) => (e['cliente'] ?? '') == nomeCliente,
-															);
-															if (idx != -1) {
-																setState(() {
-																	entregas.removeAt(idx);
-																	_atualizarContadores();
-																});
-															}
-
-															// Se não há mais entregas, tocar som de rota concluída
-															if (entregas.isEmpty) {
-																try {
-																	await _tocarSomRotaConcluida();
-																} catch (_) {}
-															}
-
-															if (!mounted) return;
-															navigator.pop();
-														},
+														if (!mounted) return;
+														navigator.pop();
+													},
 											style: ElevatedButton.styleFrom(
-												backgroundColor: Colors.green,
-												foregroundColor: Colors.white,
-												minimumSize: Size(double.infinity, 52),
+											backgroundColor: Colors.green,
+											foregroundColor: Colors.white,
+											minimumSize: Size(double.infinity, 52),
 											),
 											child: Text('ENVIAR PARA GESTOR'),
 										),
-									],
+										],
+									),
 								),
-							),
-						);
+							);
 					},
 				);
 			},
@@ -535,7 +466,7 @@ class RotaMotoristaState extends State<RotaMotorista>
 		if (sel.toLowerCase().contains('waze')) {
 			uriToLaunch = Uri.parse('waze://?q=$encoded');
 		} else if (sel.toLowerCase().contains('google') ||
-				sel.toLowerCase().contains('maps')) {
+						sel.toLowerCase().contains('maps')) {
 			// tentar esquema nativo do Google Maps
 			uriToLaunch = Uri.parse('comgooglemaps://?q=$encoded');
 		} else if (sel.isNotEmpty) {
@@ -593,18 +524,18 @@ class RotaMotoristaState extends State<RotaMotorista>
 								ListTile(
 									title: Text('Usar mapa web (Google Maps)'),
 									onTap: () {
-										_salvarMapaSelecionado('google_maps');
-										Navigator.of(ctx).pop();
-									},
+									_salvarMapaSelecionado('google_maps');
+									Navigator.of(ctx).pop();
+								},
 								),
 								...available.map((m) {
 									return ListTile(
 										leading: Icon(Icons.map),
 										title: Text(m.mapName),
 										onTap: () {
-											_salvarMapaSelecionado(m.mapName);
-											Navigator.of(ctx).pop();
-										},
+										_salvarMapaSelecionado(m.mapName);
+										Navigator.of(ctx).pop();
+									},
 									);
 								}),
 							],
@@ -616,4 +547,3 @@ class RotaMotoristaState extends State<RotaMotorista>
 			// ignore
 		}
 	}
-
