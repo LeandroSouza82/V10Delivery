@@ -4107,7 +4107,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                           ),
                           child: Center(
                             child: Text(
-                              '${item['ordem_logistica'] ?? '?'}',
+                              (item['ordem_logistica'] ?? '?').toString(),
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
