@@ -7,7 +7,7 @@ import 'package:v10_delivery/register_page.dart';
 import 'package:v10_delivery/globals.dart';
 // estilos e utilitários importados por outras telas — removidos daqui para evitar warnings
 
-const String kLogoPath = 'assets/images/branco.jpg';
+const String kLogoPath = 'assets/images/v10_delivery.jpg';
 
 // autenticação agora centralizada em `SupabaseService`
 
@@ -49,11 +49,13 @@ class _LoginPageState extends State<LoginPage> {
   bool _obscureConfirma = true;
 
   Future<void> _login() async {
+    debugPrint('>>> ESTOU AQUI: _login');
     setState(() => _loading = true);
     try {
       const testEmail = 'lsouza557@gmail.com';
       const testPass = '555555';
-      // Iniciando tentativa de login com credenciais de teste
+
+      debugPrint('Iniciando tentativa de login com e-mail fixo para teste');
 
       try {
         await SupabaseService.login(testEmail, testPass);
@@ -63,19 +65,7 @@ class _LoginPageState extends State<LoginPage> {
       }
 
       try {
-        // Preferir buscar motorista pela referência ao user_id do Supabase Auth
-        final currentUser = SupabaseService.client.auth.currentUser;
-        dynamic motorista;
-        if (currentUser != null) {
-            motorista = await SupabaseService.client
-              .from('motoristas')
-              .select()
-              .eq('user_id', currentUser.id)
-              .maybeSingle();
-        }
-
-        // Se não encontrado por user_id, tenta por e-mail (fallback)
-        motorista ??= await SupabaseService.client
+        final motorista = await SupabaseService.client
             .from('motoristas')
             .select()
             .eq('email', testEmail)
@@ -94,7 +84,9 @@ class _LoginPageState extends State<LoginPage> {
           return;
         }
 
-        final Map<String, dynamic> record = Map<String, dynamic>.from(motorista);
+        final Map<String, dynamic> record = Map<String, dynamic>.from(
+          motorista,
+        );
         final acesso = (record['acesso'] ?? '').toString().toLowerCase();
         if (acesso == 'pendente' || acesso.isEmpty) {
           if (mounted) {
@@ -116,11 +108,17 @@ class _LoginPageState extends State<LoginPage> {
         }
 
         final dynamic rawId = record['id'];
+        int recId = 0;
         String? recUuid;
-        if (rawId is String) {
-          recUuid = rawId;
-        } else if (rawId != null) {
-          recUuid = rawId.toString();
+        if (rawId is int) {
+          recId = rawId;
+        } else if (rawId is String) {
+          final s = rawId.toString();
+          if (s.contains('-')) {
+            recUuid = s;
+          } else {
+            recId = int.tryParse(s) ?? 0;
+          }
         }
         final nome = (record['nome'] ?? '').toString();
 
@@ -144,14 +142,12 @@ class _LoginPageState extends State<LoginPage> {
             debugPrint(e.toString());
           }
         }
-        // Forçar o UUID oficial pedido pelo usuário para garantir que o
-        // stream de entregas use o motorista correto.
-        const forcedUuid = '447bb6e6-2086-421b-9e49-00c0d8d1c2c8';
-        await prefs.setString('driver_uuid', forcedUuid);
-        idLogado = forcedUuid;
-        // Ainda persiste recUuid caso exista no registro
         if (recUuid != null && recUuid.isNotEmpty) {
-          await prefs.setString('driver_uuid_record', recUuid);
+          await prefs.setString('driver_uuid', recUuid);
+        }
+        if (recId > 0) {
+          await prefs.setInt('driver_id', recId);
+          idLogado = recId;
         }
         await prefs.setString('driver_name', nome);
         nomeMotorista = nome;

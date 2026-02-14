@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:share_plus/share_plus.dart';
 
 class FailureConfirmationModal extends StatefulWidget {
   final Map<String, dynamic> deliveryData;
@@ -10,12 +9,14 @@ class FailureConfirmationModal extends StatefulWidget {
 
   @override
   State createState() => _FailureConfirmationModalState();
-  static Future<String?> show(
+
+  /// Returns a map with keys 'motivo' and 'obs' when the user confirms, or null when canceled.
+  static Future<Map<String, String>?> show(
     BuildContext context, {
     String? cliente,
     String? endereco,
   }) {
-    return showModalBottomSheet<String?>(
+    return showModalBottomSheet<Map<String, String>?>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -83,8 +84,7 @@ class _FailureConfirmationModalState extends State<FailureConfirmationModal> {
     try {
       final XFile? picked = await _picker.pickImage(
         source: ImageSource.camera,
-        maxWidth: 400,
-        imageQuality: 10,
+        maxWidth: 1600,
       );
       if (picked != null) {
         if (!mounted) return;
@@ -95,44 +95,15 @@ class _FailureConfirmationModalState extends State<FailureConfirmationModal> {
     }
   }
 
-  Future<void> _sendWhatsAppAndClose() async {
+  Future<void> _confirmAndClose() async {
     final motivo = motivoSelecionado ?? 'OUTROS';
-    final obs = obsController.text.trim().isNotEmpty ? obsController.text.trim() : '-';
-    final hora = DateTime.now().toIso8601String();
-    final cliente = widget.deliveryData['cliente'] ?? '-';
-    final endereco = widget.deliveryData['endereco'] ?? '-';
+    final obs = obsController.text.trim().isNotEmpty
+        ? obsController.text.trim()
+        : '-';
 
-    final String mensagemFinal = (StringBuffer()
-          ..writeln('⚠️ *FALHA NA ENTREGA - V10 Delivery*')
-          ..writeln('🕒 *Horário:* $hora')
-          ..writeln('⚠️ *Motivo:* $motivo')
-          ..writeln('👤 *Cliente:* $cliente')
-          ..writeln('📍 *Endereço:* $endereco')
-          ..writeln('📝 *Obs:* $obs'))
-        .toString();
-
-    // Captura caminho da imagem antes de fechar
-    final String? imagePath = _imageFile?.path;
-
-    // Fecha o modal primeiro para evitar State Loss / tela azul
-    Navigator.pop(context);
-
-    // Envia em background após curto delay
-    Future.delayed(const Duration(milliseconds: 100), () async {
-      try {
-        if (imagePath != null && await File(imagePath).exists()) {
-          final xfile = XFile(imagePath);
-          // envia arquivo real
-          // ignore: deprecated_member_use
-          await Share.shareXFiles([xfile], text: mensagemFinal);
-        } else {
-          // ignore: deprecated_member_use
-          await Share.share(mensagemFinal);
-        }
-      } catch (_) {
-        // silenciar erros de plataforma
-      }
-    });
+    if (!mounted) return;
+    // Return both motivo and obs to the caller; do NOT send WhatsApp from the modal.
+    Navigator.pop(context, <String, String>{'motivo': motivo, 'obs': obs});
   }
 
   @override
@@ -234,9 +205,9 @@ class _FailureConfirmationModalState extends State<FailureConfirmationModal> {
               height: 55,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: _sendWhatsAppAndClose,
+                onPressed: _confirmAndClose,
                 child: const Text(
-                  "ENVIAR PARA GESTOR",
+                  "CONFIRMAR FALHA",
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 18,

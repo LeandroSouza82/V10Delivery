@@ -5,6 +5,7 @@ import 'services/supabase_service.dart';
 import 'core/app_colors.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/splash_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,9 +39,8 @@ class V10DeliveryApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary),
         useMaterial3: true,
       ),
-      initialRoute: '/login',
+      home: const SplashScreen(),
       routes: {
-        '/': (context) => const _PlaceholderScreen(),
         '/login': (context) => const LoginPage(),
         '/rota': (context) => const RotaMotorista(),
       },
@@ -48,16 +48,4 @@ class V10DeliveryApp extends StatelessWidget {
   }
 }
 
-class _PlaceholderScreen extends StatelessWidget {
-  const _PlaceholderScreen();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('V10 Delivery')),
-      body: const Center(
-        child: Text('Tela inicial — pronta para modularização'),
-      ),
-    );
-  }
-}
+// Placeholder screen removed — SplashScreen is the app entry point.

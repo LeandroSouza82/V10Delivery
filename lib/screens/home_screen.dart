@@ -2,19 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:map_launcher/map_launcher.dart';
-import 'package:url_launcher/url_launcher.dart';
+// map_launcher and url_launcher removed from Home UI (no external links/Lottie)
 import 'package:intl/intl.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:v10_delivery/core/app_styles.dart';
-import 'package:v10_delivery/globals.dart';
 import 'package:v10_delivery/core/app_colors.dart';
 import 'package:v10_delivery/core/constants.dart';
 import 'package:v10_delivery/core/utils.dart';
- 
+// location_service import removed from Home UI (not used here)
+// supabase import not required in this file now (drawer handles auth operations)
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:async';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:v10_delivery/services/notification_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:v10_delivery/widgets/dashboard_stats.dart';
 import 'package:v10_delivery/widgets/delivery_card.dart';
-import 'package:v10_delivery/widgets/top_header.dart';
+import 'package:v10_delivery/widgets/failure_confirmation_modal.dart';
+import 'package:v10_delivery/screens/splash_screen.dart';
 
 class RotaMotorista extends StatefulWidget {
   const RotaMotorista({super.key});
@@ -34,7 +39,15 @@ class RotaMotoristaState extends State<RotaMotorista>
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _searchingActive = false;
   bool _awaitStartChama = false;
-  
+  // Location service instantiation removed from Home state (no appbar control).
+
+  // Scaffold key to safely control drawers/modals without using Scaffold.of(context)
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // Realtime controller and channel for entregas
+  StreamController<List<Map<String, dynamic>>>? _entregasController;
+  dynamic _entregasChannel;
+  int _lastEntregasCount = 0;
 
   List<Map<String, String>> entregas = [
     {
@@ -81,13 +94,20 @@ class RotaMotoristaState extends State<RotaMotorista>
   int recolhasFaltam = 0;
   int outrosFaltam = 0;
   String? _selectedMapName;
-  String _currentFilter = 'all';
+  String _filtroSelecionado = 'TODOS';
+  bool _permissionDialogShown = false;
 
   @override
   void initState() {
     super.initState();
     _atualizarContadores();
-    _loadDriverUuidFromPrefs();
+
+    // manter a tela ligada enquanto o motorista usa a tela de rota
+    try {
+      WakelockPlus.enable();
+    } catch (e) {
+      debugPrint('Wakelock enable falhou: $e');
+    }
 
     _buscarController = AnimationController(
       vsync: this,
@@ -116,30 +136,44 @@ class RotaMotoristaState extends State<RotaMotorista>
         setState(() => _selectedMapName = mapName);
       }
     });
-  }
 
-  Future<void> _loadDriverUuidFromPrefs() async {
-    try {
-      if (idLogado == null) {
-        final prefs = await SharedPreferences.getInstance();
-        final uuid = prefs.getString('driver_uuid');
-        if (uuid != null && uuid.isNotEmpty) {
-          setState(() {
-            idLogado = uuid;
-          });
-        }
+    // initialize realtime entregas stream
+    _entregasController =
+        StreamController<List<Map<String, dynamic>>>.broadcast();
+    _initEntregasRealtime();
+
+    // show permission dialog once after frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_permissionDialogShown) {
+        _permissionDialogShown = true;
+        _showPermissionDialog();
       }
-    } catch (e) {
-      debugPrint('Erro ao carregar driver_uuid: $e');
-    }
+    });
   }
 
   @override
   void dispose() {
+    // restaurar comportamento de economia de energia
+    try {
+      WakelockPlus.disable();
+    } catch (e) {
+      debugPrint('Wakelock disable falhou: $e');
+    }
+
     _buscarController.dispose();
     _audioPlayer.dispose();
     _nomeController.dispose();
     _aptController.dispose();
+    try {
+      if (_entregasChannel != null) {
+        try {
+          _entregasChannel.unsubscribe();
+        } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      _entregasController?.close();
+    } catch (_) {}
     super.dispose();
   }
 
@@ -255,6 +289,158 @@ class RotaMotoristaState extends State<RotaMotorista>
     final navigator = Navigator.of(context);
     navigator.pop();
   }
+
+  Future<void> _showPermissionDialog() async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: Colors.grey[900],
+          title: Row(
+            children: const [
+              Icon(Icons.security, color: Colors.white),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Permissões Necessárias para Entregas',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            "Para garantir que você receba novas rotas e que seu trajeto seja registrado corretamente, precisamos que você libere: 1. Localização 'Sempre'; 2. Início Automático; 3. Sem restrições de Bateria.",
+            style: TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                // Request location permission
+                try {
+                  final status = await Geolocator.checkPermission();
+                  if (status == LocationPermission.always) {
+                    // already good
+                  } else {
+                    final req = await Geolocator.requestPermission();
+                    if (req == LocationPermission.denied) {
+                      await Geolocator.openAppSettings();
+                    } else if (req == LocationPermission.deniedForever) {
+                      await Geolocator.openAppSettings();
+                    } else if (req == LocationPermission.unableToDetermine) {
+                      await Geolocator.openLocationSettings();
+                    }
+                  }
+                } catch (e) {
+                  debugPrint('Erro pedindo permissão de localização: $e');
+                }
+
+                try {
+                  await Geolocator.openLocationSettings();
+                } catch (_) {}
+
+                _startForegroundService();
+              },
+              child: const Text('CONFIGURAR'),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.white70),
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK / ENTENDI'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _startForegroundService() {
+    // Placeholder: foreground service integration can be added here
+    // using flutter_foreground_task or platform channels.
+    debugPrint('startForegroundService: stub called');
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchEntregasForDriver(
+    String idLogado,
+  ) async {
+    try {
+      var builder = Supabase.instance.client.from('entregas').select();
+      builder = builder.eq('motorista_id', idLogado as Object);
+      if (_filtroSelecionado != 'TODOS') {
+        builder = builder.eq('tipo', _filtroSelecionado as Object);
+      }
+      // active statuses
+      builder = builder.or('status.eq.pendente,status.eq.em_rota');
+
+      final dynamic resp = await builder.order(
+        'ordem_logistica',
+        ascending: true,
+      );
+      final raw = resp as List<dynamic>? ?? <dynamic>[];
+      return raw
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('Erro fetching entregas: $e');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<void> _initEntregasRealtime() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final idLogado =
+          prefs.getString('driver_uuid') ??
+          Supabase.instance.client.auth.currentUser?.id;
+      if (idLogado == null) {
+        _entregasController?.add(<Map<String, dynamic>>[]);
+        return;
+      }
+
+      // initial fetch
+      final initial = await _fetchEntregasForDriver(idLogado);
+      _entregasController?.add(initial);
+
+      // subscribe to realtime changes for entregas filtered by motorista_id
+      try {
+        final dynamic client = Supabase.instance.client;
+        _entregasChannel = client.channel('public:entregas').on(
+          'postgres_changes',
+          {
+            'event': '*',
+            'schema': 'public',
+            'table': 'entregas',
+            'filter': 'motorista_id=eq.$idLogado',
+          },
+          (payload, [ref]) async {
+            final next = await _fetchEntregasForDriver(idLogado);
+            if (_entregasController != null && !_entregasController!.isClosed) {
+              _entregasController!.add(next);
+            }
+          },
+        ).subscribe();
+      } catch (e) {
+        debugPrint('Realtime subscription failed, falling back to polling: $e');
+        // fallback: periodic polling
+        Timer.periodic(const Duration(seconds: 3), (t) async {
+          if (_entregasController == null || _entregasController!.isClosed) {
+            t.cancel();
+            return;
+          }
+          final next = await _fetchEntregasForDriver(idLogado);
+          if (!_entregasController!.isClosed) _entregasController!.add(next);
+        });
+      }
+    } catch (e) {
+      debugPrint('Erro initEntregasRealtime: $e');
+      _entregasController?.add(<Map<String, dynamic>>[]);
+    }
+  }
+
+  // Map selection persistence removed from Home UI.
 
   // ignore: unused_element
   void _buildSuccessModal(BuildContext ctx, String nomeCliente) {
@@ -403,67 +589,125 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  // ignore: unused_element
-  Future<void> _abrirMapaComPreferencia(String endereco) async {
-    final encoded = Uri.encodeComponent(endereco);
-    final prefs = await SharedPreferences.getInstance();
-    final sel = prefs.getString(prefSelectedMapKey) ?? '';
+  // Map launching removed from Home UI to avoid external links and Lottie usage.
 
-    Uri? uriToLaunch;
-
-    if (sel.toLowerCase().contains('waze')) {
-      uriToLaunch = Uri.parse('waze://?q=$encoded');
-    } else if (sel.toLowerCase().contains('google') ||
-        sel.toLowerCase().contains('maps')) {
-      uriToLaunch = Uri.parse('comgooglemaps://?q=$encoded');
-    } else if (sel.isNotEmpty) {
-      uriToLaunch = Uri.parse(
-        'https://www.google.com/maps/search/?api=1&query=$encoded',
-      );
-    } else {
-      final available = await MapLauncher.installedMaps;
-      if (available.isNotEmpty) {
-        final m = available.first;
-        if (m.mapName.toLowerCase().contains('waze')) {
-          uriToLaunch = Uri.parse('waze://?q=$encoded');
-        } else if (m.mapName.toLowerCase().contains('google')) {
-          uriToLaunch = Uri.parse('comgooglemaps://?q=$encoded');
-        } else {
-          uriToLaunch = Uri.parse(
-            'https://www.google.com/maps/search/?api=1&query=$encoded',
-          );
-        }
-      } else {
-        uriToLaunch = Uri.parse(
-          'https://www.google.com/maps/search/?api=1&query=$encoded',
-        );
-      }
-    }
-
-    try {
-      await launchUrl(uriToLaunch, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      debugPrint(e.toString());
-      final web = Uri.parse(
-        'https://www.google.com/maps/search/?api=1&query=$encoded',
-      );
-      try {
-        await launchUrl(web, mode: LaunchMode.externalApplication);
-      } catch (e) {
-        debugPrint(e.toString());
-      }
-    }
-  }
-
-  
+  // Map preference UI removed — handled externally or via settings.
 
   @override
   Widget build(BuildContext context) {
-    debugPrint('ID Logado atual: $idLogado');
     // Minimal placeholder UI to keep the screen functional after migration.
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: const TopHeader(),
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        backgroundColor: AppColors.background,
+        foregroundColor: Colors.white,
+        centerTitle: true,
+        leadingWidth: 72,
+        leading: FutureBuilder<List<Map<String, dynamic>>>(
+          future: NotificationService.fetchAvisos(),
+          builder: (ctx, snap) {
+            final avisos = snap.data ?? <Map<String, dynamic>>[];
+            final count = avisos
+                .where(
+                  (a) =>
+                      a['lida'] == false || a['lida'] == 0 || a['lida'] == 'f',
+                )
+                .length;
+            return IconButton(
+              tooltip: 'Avisos do Gestor',
+              icon: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  const Icon(Icons.chat),
+                  if (count > 0)
+                    Positioned(
+                      right: -6,
+                      top: -6,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          count.toString(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              onPressed: () {
+                if (snap.connectionState == ConnectionState.waiting) return;
+                final avisosLocal = avisos;
+                showDialog<void>(
+                  context: context,
+                  builder: (dctx) {
+                    return AlertDialog(
+                      title: const Text('Avisos do Gestor'),
+                      content: SizedBox(
+                        width: double.maxFinite,
+                        child: avisosLocal.isEmpty
+                            ? const Text('Nenhum aviso encontrado')
+                            : ListView.builder(
+                                shrinkWrap: true,
+                                itemCount: avisosLocal.length,
+                                itemBuilder: (c, i) {
+                                  final a = avisosLocal[i];
+                                  final texto =
+                                      a['texto'] ??
+                                      a['conteudo'] ??
+                                      a['mensagem'] ??
+                                      a['titulo'] ??
+                                      '';
+                                  final lida =
+                                      a['lida'] == true ||
+                                      a['lida'] == 1 ||
+                                      a['lida'] == 't';
+                                  return ListTile(
+                                    title: Text(texto.toString()),
+                                    subtitle: lida
+                                        ? const Text('Lida')
+                                        : const Text('Não lida'),
+                                  );
+                                },
+                              ),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(dctx).pop(),
+                          child: const Text('Fechar'),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+            );
+          },
+        ),
+        title: GestureDetector(
+          // developer shortcut: long-press to insert a test entrega for the logged-in driver
+          onLongPress: _insertTestEntrega,
+          child: const Text(
+            'V10 Delivery',
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Menu',
+            icon: const Icon(Icons.menu),
+            onPressed: _showMenuModal,
+          ),
+        ],
+      ),
+      key: _scaffoldKey,
       body: Padding(
         padding: const EdgeInsets.all(12.0),
         child: Column(
@@ -475,106 +719,600 @@ class RotaMotoristaState extends State<RotaMotorista>
             ),
             const SizedBox(height: 8),
 
-            // Stream fornece tanto os dados da lista quanto os contadores para os cards
+            const SizedBox(height: 8),
             Expanded(
               child: StreamBuilder<List<Map<String, dynamic>>>(
-                stream: Supabase.instance.client
-                    .from('entregas')
-                    .stream(primaryKey: ['id'])
-                    .order('ordem_logistica'),
+                stream: _entregasController?.stream,
                 builder: (ctx, snap) {
-                if (snap.hasError) {
-                  return Center(
-                    child: Text(
-                      'Erro ao carregar entregas',
-                      style: AppStyles.white,
-                    ),
-                  );
-                }
+                  final lista = snap.data ?? <Map<String, dynamic>>[];
 
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: Colors.white),
-                  );
-                }
+                  // Áudio: tocar 'chama' quando houver aumento na quantidade de entregas
+                  try {
+                    final current = lista.length;
+                    if (current > _lastEntregasCount) {
+                      // novo item adicionado — tocar uma vez por incremento
+                      try {
+                        _audioPlayer.play(AssetSource('audios/chama.mp3'));
+                      } catch (e) {
+                        debugPrint('Erro ao tocar chama.mp3: $e');
+                      }
+                    }
+                    _lastEntregasCount = current;
+                  } catch (_) {}
 
-                final rows = snap.hasData
-                    ? (snap.data ?? <Map<String, dynamic>>[])
-                    : <Map<String, dynamic>>[];
+                  // counts are computed inside DashboardStats using the provided lista
 
-                // Sem filtros: mostrar todas as linhas retornadas pelo stream
-                final active = rows;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      DashboardStats(
+                        entregas: lista,
+                        selectedFilter: _filtroSelecionado,
+                        onFilterChanged: (f) {
+                          setState(() {
+                            if (_filtroSelecionado == f) {
+                              _filtroSelecionado = 'TODOS';
+                            } else {
+                              _filtroSelecionado = f;
+                            }
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child:
+                            (snap.connectionState == ConnectionState.waiting ||
+                                lista.isEmpty)
+                            ? Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: const [
+                                    SizedBox(
+                                      width: 80,
+                                      height: 80,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 3,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              Colors.deepPurple,
+                                            ),
+                                      ),
+                                    ),
+                                    SizedBox(height: 12),
+                                    Text(
+                                      'Buscando rotas na sua região...',
+                                      style: TextStyle(color: Colors.white70),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.all(16),
+                                itemCount: lista.length,
+                                itemBuilder: (ctx, idx) {
+                                  final e = lista[idx];
+                                  return DeliveryCard(
+                                    key: ValueKey(e['id']),
+                                    data: Map<String, dynamic>.from(e),
+                                    index: idx,
+                                    onConfirmDelivery: (ctx, clienteNome) {
+                                      _finalizarEntrega(e, ctx, clienteNome);
+                                    },
+                                    onReportFailure: (id, cliente, endereco, motivo) async {
+                                      final messenger = ScaffoldMessenger.of(
+                                        ctx,
+                                      );
+                                      final idEnt = id.toString();
+                                      if (idEnt.isEmpty) {
+                                        messenger.showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'ID da entrega inválido',
+                                            ),
+                                          ),
+                                        );
+                                        return;
+                                      }
 
-                final totalEntregas = active
-                  .where((e) => (e['tipo'] ?? '').toString().toLowerCase().contains('entrega'))
-                  .length;
-                final totalRecolha = active
-                  .where((e) => (e['tipo'] ?? '').toString().toLowerCase().contains('recolha'))
-                  .length;
-                final totalOutros = (active.length - totalEntregas - totalRecolha).clamp(0, active.length);
+                                      // open the failure modal to collect reason/obs
+                                      final Map<String, String>? result =
+                                          await FailureConfirmationModal.show(
+                                            ctx,
+                                            cliente: cliente.toString(),
+                                            endereco: endereco.toString(),
+                                          );
 
-                // Aplicar filtro selecionado pelos cards
-                final displayList = (_currentFilter == 'all')
-                    ? active
-                    : active.where((e) {
-                        final tipo = (e['tipo'] ?? '').toString().toLowerCase();
-                        if (_currentFilter == 'entrega') return tipo.contains('entrega');
-                        if (_currentFilter == 'recolha') return tipo.contains('recolha');
-                        if (_currentFilter == 'outros') return !tipo.contains('entrega') && !tipo.contains('recolha');
-                        return true;
-                      }).toList();
+                                      if (result == null ||
+                                          (result['motivo'] ?? '').isEmpty) {
+                                        // user cancelled or didn't choose a reason
+                                        return;
+                                      }
 
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    DashboardStats(
-                      entregasCount: totalEntregas,
-                      recolhasCount: totalRecolha,
-                      outrosCount: totalOutros,
-                      onSelectEntregas: () => setState(() => _currentFilter = 'entrega'),
-                      onSelectRecolha: () => setState(() => _currentFilter = 'recolha'),
-                      onSelectOutros: () => setState(() => _currentFilter = 'outros'),
-                    ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: displayList.isEmpty
-                          ? const Center(
-                              child: Text(
-                                'Nenhuma entrega disponível',
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                      final motivoDigitado = result['motivo']!
+                                          .toString();
+
+                                      try {
+                                        final now = DateTime.now();
+
+                                        final payloadFalha = {
+                                          'status': 'falha',
+                                          'motivo_nao_entrega': motivoDigitado,
+                                          'data_conclusao': now
+                                              .toUtc()
+                                              .toIso8601String(),
+                                          'horario_conclusao': now
+                                              .toUtc()
+                                              .toIso8601String(),
+                                        };
+
+                                        debugPrint(
+                                          '[DEBUG] entregas.update payload (falha) id=$idEnt: $payloadFalha',
+                                        );
+
+                                        final updateResultFalha = await Supabase
+                                            .instance
+                                            .client
+                                            .from('entregas')
+                                            .update(payloadFalha)
+                                            .eq('id', idEnt);
+
+                                        debugPrint(
+                                          '[DEBUG] entregas.update result (falha) id=$idEnt: $updateResultFalha',
+                                        );
+
+                                        // notify gestor after successful update (formatted V10)
+                                        final phone =
+                                            await _getTelefoneGestor();
+                                        final hora = DateFormat(
+                                          'HH:mm',
+                                        ).format(DateTime.now());
+                                        final entregador =
+                                            nomeMotorista.isNotEmpty
+                                            ? nomeMotorista
+                                            : 'Leandro';
+                                        final mensagem = StringBuffer()
+                                          ..writeln(
+                                            '⚠️ *FALHA NA ENTREGA - V10 Delivery*',
+                                          )
+                                          ..writeln('🕒 *Horário:* $hora')
+                                          ..writeln(
+                                            '👤 *Cliente:* ${cliente.toString()}',
+                                          )
+                                          ..writeln(
+                                            '📍 *Endereço:* ${endereco.toString()}',
+                                          )
+                                          ..writeln('🤝 *Recebido por:* -')
+                                          ..writeln(
+                                            '🚚 *Entregador:* $entregador',
+                                          )
+                                          ..writeln(
+                                            '📝 *Obs:* ${motivoDigitado.isNotEmpty ? motivoDigitado : '-'}',
+                                          );
+
+                                        try {
+                                          await enviarWhatsApp(
+                                            mensagem.toString(),
+                                            phone: phone,
+                                          );
+                                        } catch (_) {
+                                          final uri = Uri(
+                                            scheme: 'tel',
+                                            path: phone,
+                                          );
+                                          if (await canLaunchUrl(uri)) {
+                                            await launchUrl(uri);
+                                          }
+                                        }
+
+                                        // Após atualizar como 'falha', buscar lista atual e tocar som de sucesso se vazia
+                                        try {
+                                          final prefs =
+                                              await SharedPreferences.getInstance();
+                                          final idLogado =
+                                              prefs.getString('driver_uuid') ??
+                                              Supabase
+                                                  .instance
+                                                  .client
+                                                  .auth
+                                                  .currentUser
+                                                  ?.id;
+                                          if (idLogado != null) {
+                                            final next =
+                                                await _fetchEntregasForDriver(
+                                                  idLogado,
+                                                );
+                                            if (next.isEmpty) {
+                                              try {
+                                                await _tocarSomSucesso();
+                                              } catch (e) {
+                                                debugPrint(
+                                                  'Erro ao tocar som de sucesso: $e',
+                                                );
+                                              }
+                                            }
+                                          }
+                                        } catch (e) {
+                                          debugPrint(
+                                            'Erro verificando entregas após falha: $e',
+                                          );
+                                        }
+                                      } catch (e) {
+                                        debugPrint('Erro ao marcar falha: $e');
+                                        messenger.showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Erro ao registrar falha: ${e.toString()}',
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                  );
+                                },
                               ),
-                            )
-                          : ListView.builder(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: displayList.length,
-                              itemBuilder: (ctx, idx) {
-                                final item = displayList[idx];
-                                final cardData = <String, String>{
-                                  'id': item['id']?.toString() ?? '',
-                                  'cliente': item['cliente']?.toString() ?? '',
-                                  'endereco': item['endereco']?.toString() ?? '',
-                                  'tipo': item['tipo']?.toString() ?? '',
-                                  'obs': item['obs']?.toString() ?? '',
-                                  'status': item['status']?.toString() ?? '',
-                                };
-
-                                return DeliveryCard(
-                                  data: cardData,
-                                  index: idx,
-                                  onConfirmDelivery: _buildSuccessModal,
-                                  onReportFailure: _enviarFalha,
-                                );
-                              },
-                            ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ), // Expanded
           ], // Column children
         ), // Column
       ), // Padding
     ); // Scaffold
+  }
+
+  // Helpers: fetch driver name, greeting and menu modal
+  Future<String> _getDriverName() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('driver_name');
+      if (saved != null && saved.isNotEmpty) return saved;
+
+      final uuid = prefs.getString('driver_uuid');
+      if (uuid != null && uuid.isNotEmpty) {
+        try {
+          final resp = await Supabase.instance.client
+              .from('motoristas')
+              .select('nome')
+              .eq('uuid', uuid)
+              .limit(1)
+              .maybeSingle();
+          final mapResp = resp as Map<dynamic, dynamic>?;
+          if (mapResp != null && mapResp['nome'] != null) {
+            final n = mapResp['nome'].toString();
+            if (n.isNotEmpty) {
+              await prefs.setString('driver_name', n);
+              return n;
+            }
+          }
+        } catch (_) {}
+      }
+
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null) {
+        final meta = user.userMetadata ?? <String, dynamic>{};
+        final nomeMeta = meta['nome'] ?? meta['name'] ?? meta['full_name'];
+        if (nomeMeta != null && nomeMeta.toString().isNotEmpty) {
+          return nomeMeta.toString();
+        }
+      }
+    } catch (_) {}
+    return 'Motorista';
+  }
+
+  Future<String> _getTelefoneGestor() async {
+    try {
+      final dynamic q = await Supabase.instance.client
+          .from('config_geral')
+          .select('telefone_gestor')
+          .limit(1)
+          .maybeSingle();
+      if (q != null) {
+        final map = q as Map<dynamic, dynamic>;
+        final val = map['telefone_gestor'] ?? map['telefone'] ?? map['contato'];
+        if (val != null && val.toString().isNotEmpty) {
+          return val.toString();
+        }
+      }
+    } catch (_) {}
+    try {
+      return numeroGestor;
+    } catch (_) {}
+    return '5548996525008';
+  }
+
+  Future<void> _finalizarEntrega(
+    Map<String, dynamic> entrega,
+    BuildContext ctx,
+    String clienteNome,
+  ) async {
+    debugPrint('>>> DISPARANDO GRAVAÇÃO DO OK <<<');
+    final messenger = ScaffoldMessenger.of(ctx);
+    final idEnt = entrega['id']?.toString() ?? '';
+    if (idEnt.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('ID da entrega inválido')),
+      );
+      return;
+    }
+    try {
+      final now = DateTime.now();
+      final hora = DateFormat('HH:mm').format(now);
+
+      final payloadOk = {
+        'status': 'entregue',
+        'data_conclusao': now.toUtc().toIso8601String(),
+        'horario_conclusao': now.toUtc().toIso8601String(),
+      };
+
+      final dados = payloadOk;
+      debugPrint('[DEBUG] OK Payload: $dados');
+
+      debugPrint(
+        '[DEBUG] entregas.update payload (entregue) id=$idEnt: $payloadOk',
+      );
+
+      final updateResultOk = await Supabase.instance.client
+          .from('entregas')
+          .update(payloadOk)
+          .eq('id', idEnt);
+
+      debugPrint(
+        '[DEBUG] entregas.update result (entregue) id=$idEnt: $updateResultOk',
+      );
+
+      // after successful update, notify gestor via WhatsApp
+      try {
+        final phone = await _getTelefoneGestor();
+        final driverName = await _getDriverName();
+        final mensagem =
+            '📦 ENTREGA CONCLUÍDA: $clienteNome\nMotorista: $driverName\nHora: $hora';
+        await enviarWhatsApp(mensagem, phone: phone);
+      } catch (e) {
+        debugPrint('Erro ao notificar gestor: $e');
+      }
+
+      // Após atualizar como 'entregue', buscar lista atual e tocar som de sucesso se vazia
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final idLogado =
+            prefs.getString('driver_uuid') ??
+            Supabase.instance.client.auth.currentUser?.id;
+        if (idLogado != null) {
+          final next = await _fetchEntregasForDriver(idLogado);
+          if (next.isEmpty) {
+            try {
+              await _tocarSomSucesso();
+            } catch (e) {
+              debugPrint('Erro ao tocar som de sucesso: $e');
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Erro verificando entregas após OK: $e');
+      }
+    } catch (e) {
+      debugPrint('[DEBUG] Erro no OK: $e');
+      debugPrint('Erro ao atualizar entrega: $e');
+      messenger.showSnackBar(
+        SnackBar(content: Text('Erro ao finalizar entrega: ${e.toString()}')),
+      );
+      return;
+    }
+  }
+
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Bom dia,';
+    if (hour < 18) return 'Boa tarde,';
+    return 'Boa noite,';
+  }
+
+  Future<void> _insertTestEntrega() async {
+    // Developer helper: inserts a test entrega for the currently-logged driver (long-press title)
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final motoristaId =
+          prefs.getString('driver_uuid') ??
+          Supabase.instance.client.auth.currentUser?.id;
+      if (motoristaId == null || motoristaId.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('driver_uuid não encontrado - faça login primeiro'),
+          ),
+        );
+        return;
+      }
+
+      final payload = {
+        'cliente': 'CLIENTE TESTE V10',
+        'endereco': 'Rua de Teste, 100',
+        'status': 'em_rota',
+        'tipo': 'Entrega',
+        'motorista_id': motoristaId,
+        'ordem_logistica': 999,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      };
+
+      debugPrint('[DEBUG] inserindo entrega de teste payload: $payload');
+      final resp = await Supabase.instance.client
+          .from('entregas')
+          .insert(payload)
+          .select();
+      debugPrint('[DEBUG] insert teste entregas response: $resp');
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Entrega de teste inserida: ${resp.isNotEmpty ? resp[0]['id'] : resp.toString()}',
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[DEBUG] erro ao inserir entrega de teste: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erro ao inserir entrega de teste: ${e.toString()}'),
+        ),
+      );
+    }
+  }
+
+  void _showMenuModal() async {
+    final nav = Navigator.of(context);
+    final nome = await _getDriverName();
+    final telefoneGestor = await _getTelefoneGestor();
+    if (!mounted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.grey[900],
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      isScrollControlled: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const CircleAvatar(
+                      radius: 28,
+                      backgroundColor: Colors.deepPurpleAccent,
+                      child: Icon(Icons.person, color: Colors.white),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _greeting(),
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Olá, $nome!',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Divider(color: Colors.white12),
+                ListTile(
+                  leading: const Icon(Icons.person, color: Colors.white),
+                  title: const Text(
+                    'Perfil',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () => Navigator.of(ctx).pop(),
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: const Icon(Icons.support_agent, color: Colors.white),
+                  title: const Text(
+                    'Falar com Gestor',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () async {
+                    Navigator.of(ctx).pop();
+                    final phone = telefoneGestor;
+                    if (phone.isNotEmpty) {
+                      try {
+                        final uri = Uri(scheme: 'tel', path: phone);
+                        if (await canLaunchUrl(uri)) {
+                          await launchUrl(uri);
+                          return;
+                        }
+                      } catch (_) {}
+                      // fallback to WhatsApp if tel not available
+                      try {
+                        await enviarWhatsApp(
+                          'Olá, preciso de suporte',
+                          phone: phone,
+                        );
+                      } catch (_) {}
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Número do gestor indisponível'),
+                        ),
+                      );
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: const Icon(Icons.logout, color: Colors.red),
+                  title: const Text(
+                    'Sair',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                  onTap: () async {
+                    Navigator.of(ctx).pop();
+                    try {
+                      final prefs = await SharedPreferences.getInstance();
+                      final uuid = prefs.getString('driver_uuid') ?? '';
+                      final id = prefs.getInt('driver_id') ?? 0;
+                      final ts = DateTime.now().toUtc().toIso8601String();
+                      final payload = {
+                        'esta_online': false,
+                        'ultima_atualizacao': ts,
+                      };
+                      try {
+                        if (uuid.isNotEmpty) {
+                          await Supabase.instance.client.from('motoristas').update(payload).eq('uuid', uuid);
+                        } else if (id > 0) {
+                          await Supabase.instance.client.from('motoristas').update(payload).eq('id', id);
+                        }
+                      } catch (e) {
+                        debugPrint('Erro atualizando status motorista: $e');
+                      }
+
+                      try {
+                        await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+                      } catch (_) {
+                        await Supabase.instance.client.auth.signOut();
+                      }
+
+                      try {
+                        await prefs.remove('driver_uuid');
+                        await prefs.remove('driver_name');
+                        await prefs.remove('driver_id');
+                      } catch (_) {}
+                    } catch (e) {
+                      debugPrint('Erro no logout: $e');
+                    }
+
+                    if (mounted) {
+                      nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const SplashScreen()), (r) => false);
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 }

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-// supabase import not used here; splash uses prefs only
 import 'home_page.dart';
 import 'package:v10_delivery/screens/login_screen.dart';
 
@@ -21,7 +20,6 @@ class _SplashPageState extends State<SplashPage> {
   }
 
   Future<void> _start() async {
-    // show splash for 2.5s then route
     await Future.delayed(const Duration(milliseconds: 2500));
 
     final prefs = await SharedPreferences.getInstance();
@@ -39,7 +37,7 @@ class _SplashPageState extends State<SplashPage> {
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => LoginPage()),
+          MaterialPageRoute(builder: (_) => const LoginPage()),
         );
       }
     }
@@ -53,7 +51,6 @@ class _SplashPageState extends State<SplashPage> {
         child: Column(
           mainAxisSize: MainAxisSize.max,
           children: [
-            // Espaço expansível que centraliza o bloco do logo
             Expanded(
               child: Center(
                 child: Column(
@@ -73,7 +70,7 @@ class _SplashPageState extends State<SplashPage> {
                             child: SizedBox(
                               width: MediaQuery.of(context).size.width * 0.75,
                               child: Image.asset(
-                                'assets/images/branco.jpg',
+                                'assets/images/v10_delivery.jpg',
                                 fit: BoxFit.contain,
                               ),
                             ),
@@ -95,7 +92,6 @@ class _SplashPageState extends State<SplashPage> {
               ),
             ),
 
-            // Rodapé fixo
             Padding(
               padding: const EdgeInsets.only(bottom: 16.0),
               child: Text(
