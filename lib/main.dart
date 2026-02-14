@@ -1091,6 +1091,7 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Controller para rolar a lista de entregas quando novos pedidos chegarem
   late ScrollController _entregasScrollController;
   Timer? _entregasPollingTimer;
+  Timer? _heartbeatTimer;
   // alias getter para compatibilidade com instruções que usam `_entregas`
   List<dynamic> get _entregas => entregas;
   // CONTROLE DO MODAL DE SUCESSO (OK)
@@ -1282,6 +1283,7 @@ class RotaMotoristaState extends State<RotaMotorista>
           await _startForegroundService();
         } catch (_) {}
         _startPolling();
+        _startHeartbeat();
       }
       // Garantir que o banco reflita o estado salvo
       try {
@@ -1451,6 +1453,9 @@ class RotaMotoristaState extends State<RotaMotorista>
     try {
       _positionSubscription?.cancel();
     } catch (_) {}
+    try {
+      _heartbeatTimer?.cancel();
+    } catch (_) {}
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -1494,6 +1499,52 @@ class RotaMotoristaState extends State<RotaMotorista>
       debugPrint('Foreground service parado');
     } catch (e) {
       debugPrint('Erro ao parar foreground service: $e');
+    }
+  }
+
+  // Heartbeat: mantém o motorista marcado como online no Supabase a cada 20s
+  void _startHeartbeat() {
+    try {
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
+        try {
+          await _sendOnlineHeartbeat();
+        } catch (e) {
+          debugPrint('Erro no heartbeat: $e');
+        }
+      });
+      // Enviar imediatamente uma vez
+      _sendOnlineHeartbeat().catchError(
+        (e) => debugPrint('Erro heartbeat inicial: $e'),
+      );
+      debugPrint('Heartbeat iniciado');
+    } catch (e) {
+      debugPrint('Erro iniciando heartbeat: $e');
+    }
+  }
+
+  void _stopHeartbeat() {
+    try {
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = null;
+      debugPrint('Heartbeat parado');
+    } catch (e) {
+      debugPrint('Erro parando heartbeat: $e');
+    }
+  }
+
+  Future<void> _sendOnlineHeartbeat() async {
+    try {
+      // Usar ID explícito fornecido pelo cliente para evitar confusões
+      const String heartbeatId = '447bb6e6-2086-421b-9e49-00c0d8d1c2c8';
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+      await Supabase.instance.client
+          .from('motoristas')
+          .update({'esta_online': true, 'ultima_atualizacao': nowIso})
+          .eq('id', heartbeatId);
+      debugPrint('Heartbeat enviado para $heartbeatId @ $nowIso');
+    } catch (e) {
+      debugPrint('Erro enviando heartbeat: $e');
     }
   }
 
@@ -1642,7 +1693,8 @@ class RotaMotoristaState extends State<RotaMotorista>
         if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
           idToUse = _motoristaId;
         } else {
-          idToUse = prefs.getString('driver_id') ??
+          idToUse =
+              prefs.getString('driver_id') ??
               prefs.getInt('driver_id')?.toString() ??
               '';
         }
@@ -3337,6 +3389,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     // Start foreground service + polling
                                     await _startForegroundService();
                                     _startPolling();
+                                    _startHeartbeat();
                                     if (!mounted) return;
                                     WidgetsBinding.instance
                                         .addPostFrameCallback((_) {
@@ -3353,6 +3406,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     // Stop service + polling
                                     await _stopForegroundService();
                                     _stopPolling();
+                                    _stopHeartbeat();
                                     if (!mounted) return;
                                     WidgetsBinding.instance
                                         .addPostFrameCallback((_) {
@@ -3762,8 +3816,6 @@ class RotaMotoristaState extends State<RotaMotorista>
                               TextButton(
                                 onPressed: () async {
                                   Navigator.of(ctx).pop();
-                                  // Capture NavigatorState before awaiting to avoid using
-                                  // BuildContext across an async gap.
                                   final nav = Navigator.of(context);
                                   // limpar estado UI local imediatamente
                                   if (mounted) {
@@ -3772,70 +3824,81 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       _avatarPath = null;
                                     });
                                   }
+
+                                  // 1) Cancelar timers/heartbeat/streams imediatamente
+                                  try {
+                                    try {
+                                      _heartbeatTimer?.cancel();
+                                    } catch (_) {}
+                                    try {
+                                      _entregasPollingTimer?.cancel();
+                                    } catch (_) {}
+                                    try {
+                                      _reconnectTimer?.cancel();
+                                    } catch (_) {}
+                                    try {
+                                      _fgStorageTimer?.cancel();
+                                    } catch (_) {}
+                                    try {
+                                      _entregasController.close();
+                                    } catch (_) {}
+                                    try {
+                                      _positionSubscription?.cancel();
+                                    } catch (_) {}
+                                    try {
+                                      await _stopForegroundService();
+                                    } catch (_) {}
+                                  } catch (e) {
+                                    debugPrint(
+                                      'Erro cancelando timers antes de logout: $e',
+                                    );
+                                  }
+
+                                  // 2) Tentar atualizar o status no Supabase antes do signOut
                                   try {
                                     final prefs =
                                         await SharedPreferences.getInstance();
-                                    // tentar marcar motorista como offline no Supabase antes de limpar prefs
-                                    try {
-                                      // Preferir usar email salvo para localizar o motorista
-                                      final savedEmail =
-                                          prefs.getString('email_salvo') ??
-                                          Supabase
-                                              .instance
-                                              .client
-                                              .auth
-                                              .currentUser
-                                              ?.email;
-                                      if (savedEmail != null &&
-                                          savedEmail.isNotEmpty) {
-                                        try {
-                                          final client =
-                                              Supabase.instance.client;
-                                          await client
-                                              .from('motoristas')
-                                              .update({
-                                                'status': 'offline',
-                                                'esta_online': false,
-                                                'lat': null,
-                                                'lng': null,
-                                              })
-                                              .ilike('email', savedEmail);
-                                        } catch (e) {
-                                          debugPrint(
-                                            'ERRO LOGOUT: falha ao atualizar status offline por email: $e',
-                                          );
-                                        }
-                                      } else {
-                                        // Fallback para telefone como antes
-                                        final phone =
-                                            prefs.getString('driver_phone') ??
-                                            '';
-                                        final tel = phone.replaceAll(
-                                          RegExp(r'\D'),
-                                          '',
+                                    String idToUse =
+                                        prefs.getString('driver_uuid') ??
+                                        prefs.getString('motorista_uuid') ??
+                                        prefs.getString('driver_id') ??
+                                        prefs.getInt('driver_id')?.toString() ??
+                                        '';
+                                    // fallback para UUID conhecido se storage vazio
+                                    if (idToUse.isEmpty) {
+                                      idToUse =
+                                          '447bb6e6-2086-421b-9e49-00c0d8d1c2c8';
+                                    }
+                                    if (idToUse.isNotEmpty && idToUse != '0') {
+                                      try {
+                                        await Supabase.instance.client
+                                            .from('motoristas')
+                                            .update({
+                                              'esta_online': false,
+                                              'ultima_atualizacao':
+                                                  DateTime.now()
+                                                      .toUtc()
+                                                      .toIso8601String(),
+                                            })
+                                            .eq('id', idToUse);
+                                      } catch (e) {
+                                        debugPrint(
+                                          'ERRO LOGOUT: falha ao atualizar esta_online=false: $e',
                                         );
-                                        if (tel.isNotEmpty) {
-                                          try {
-                                            final client =
-                                                Supabase.instance.client;
-                                            await client
-                                                .from('motoristas')
-                                                .update({
-                                                  'status': 'offline',
-                                                  'esta_online': false,
-                                                  'lat': null,
-                                                  'lng': null,
-                                                })
-                                                .eq('telefone', tel);
-                                          } catch (e) {
-                                            debugPrint(
-                                              'ERRO LOGOUT: falha ao atualizar status offline por telefone: $e',
-                                            );
-                                          }
-                                        }
                                       }
-                                    } catch (_) {}
-                                    // apenas desmarcar 'manter_logado' e remover dados de sessão
+                                    }
+
+                                    // tentar deslogar do Supabase/auth (não bloquear o flow se falhar)
+                                    try {
+                                      await Supabase.instance.client.auth
+                                          .signOut();
+                                    } catch (e) {
+                                      debugPrint(
+                                        'Erro ao executar Supabase signOut: $e',
+                                      );
+                                    }
+
+                                    // limpar prefs e dados locais (não bloquear o logout se falhar)
                                     try {
                                       await prefs.setBool(
                                         'manter_logado',
@@ -3850,7 +3913,11 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     // NÃO remover email_salvo — usuário pediu para preservar
                                     idLogado = null;
                                     nomeMotorista = '';
-                                  } catch (_) {}
+                                  } catch (e) {
+                                    debugPrint('Erro no fluxo de logout: $e');
+                                  }
+
+                                  // 3) Navegar para Splash (e o signOut pode ser feito no Splash ou onde apropriado)
                                   if (!mounted) return;
                                   Future.microtask(() {
                                     nav.pushAndRemoveUntil(
