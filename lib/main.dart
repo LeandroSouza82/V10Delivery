@@ -17,8 +17,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:convert';
@@ -65,11 +63,8 @@ class ItemHistorico {
 final List<ItemHistorico> historicoEntregas = [];
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp();
-  } catch (_) {}
-
-  await FirebaseMessaging.instance.requestPermission();
+  // Firebase initialization and messaging removed: token handling now
+  // uses a SharedPreferences-backed fallback. Keep app bindings initialized.
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -1180,23 +1175,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             allowWifiLock: true,
           ),
         );
-        // Escutar refresh de token FCM e sincronizar com o banco
-        try {
-          FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-            debugPrint('FCM token refreshed: $newToken');
-            try {
-              final prefs = await SharedPreferences.getInstance();
-              if (newToken.isNotEmpty) {
-                await prefs.setString('fcm_token', newToken);
-                debugPrint('FCM token salvo em prefs: $newToken');
-              }
-            } catch (e) {
-              debugPrint('Erro onTokenRefresh handler: $e');
-            }
-          });
-        } catch (e) {
-          debugPrint('Erro registrando listener de token FCM: $e');
-        }
+        // FCM token refresh listener removed (no Firebase usage)
         // localização já foi solicitada anteriormente (evita duplicação)
       } catch (e) {
         debugPrint('Erro init foreground task: $e');
@@ -1266,31 +1245,21 @@ class RotaMotoristaState extends State<RotaMotorista>
           } catch (e) {
             debugPrint('Erro iniciando LocationService: $e');
           }
-          // Garantir registro do token FCM mesmo em auto-login
+          // Garantir registro do token FCM armazenado nas prefs (sem Firebase)
           try {
-            try {
-              await FirebaseMessaging.instance.requestPermission();
-            } catch (_) {}
-            final fcmToken = await FirebaseMessaging.instance.getToken();
-            if (fcmToken != null && fcmToken.isNotEmpty) {
+            final storedToken = prefs.getString('fcm_token');
+            if (storedToken != null && storedToken.isNotEmpty) {
               try {
                 await Supabase.instance.client
                     .from('motoristas')
-                    .update({'fcm_token': fcmToken})
+                    .update({'fcm_token': storedToken})
                     .eq('id', _motoristaId);
               } catch (e) {
                 debugPrint('Erro atualizando fcm_token no banco: $e');
               }
-              try {
-                await prefs.setString('fcm_token', fcmToken);
-              } catch (_) {}
-            } else {
-              debugPrint(
-                'FCM token ausente durante auto-login para $_motoristaId',
-              );
             }
           } catch (e) {
-            debugPrint('Erro ao obter/registrar FCM no auto-login: $e');
+            debugPrint('Erro ao sincronizar token salvo no auto-login: $e');
           }
         }
       } catch (e) {
@@ -1666,32 +1635,27 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Atualiza token FCM do dispositivo no registro do motorista no Supabase
   Future<void> _atualizarTokenNoBanco() async {
     try {
-      String? token = await FirebaseMessaging.instance.getToken();
+      final prefs = await SharedPreferences.getInstance();
+      final String? token = prefs.getString('fcm_token');
       if (token != null && token.isNotEmpty) {
+        String idToUse = '';
         if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
+          idToUse = _motoristaId;
+        } else {
+          idToUse = prefs.getString('driver_id') ??
+              prefs.getInt('driver_id')?.toString() ??
+              '';
+        }
+        if (idToUse.isEmpty || idToUse == '0') return;
+        try {
           await Supabase.instance.client
               .from('motoristas')
               .update({'fcm_token': token})
-              .eq('id', _motoristaId);
-        } else {
-          final prefs = await SharedPreferences.getInstance();
-          final String? prefId =
-              prefs.getString('driver_id') ??
-              prefs.getInt('driver_id')?.toString();
-          if (prefId != null && prefId.isNotEmpty) {
-            await Supabase.instance.client
-                .from('motoristas')
-                .update({'fcm_token': token})
-                .eq('id', prefId);
-          }
+              .eq('id', idToUse);
+          debugPrint('Token FCM (prefs) sincronizado com o banco');
+        } catch (e) {
+          debugPrint('ERRO ao sincronizar token FCM: $e');
         }
-        // log claro para auditoria (não printar token)
-        debugPrint('Token FCM salvo');
-        try {
-          await SharedPreferences.getInstance().then(
-            (prefs) => prefs.setString('fcm_token', token),
-          );
-        } catch (_) {}
       }
     } catch (e) {
       debugPrint('ERRO ao sincronizar token FCM: $e');
