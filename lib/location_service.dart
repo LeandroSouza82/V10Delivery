@@ -102,10 +102,11 @@ class LocationService {
       final prefs = await SharedPreferences.getInstance();
       final int? codigoV10 = prefs.getInt('codigo_v10');
 
+      final String ts = DateTime.now().toUtc().toIso8601String();
       final Map<String, dynamic> payload = {
-        'lat': lat,
-        'lng': lng,
-        'ultima_atualizacao': 'now()',
+        'lat': lat.toString(),
+        'lng': lng.toString(),
+        'ultima_atualizacao': ts,
       };
 
       // 1) Tentar por user_id (UUID do Auth)

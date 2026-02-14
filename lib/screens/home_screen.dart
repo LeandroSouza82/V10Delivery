@@ -28,6 +28,13 @@ class RotaMotorista extends StatefulWidget {
   RotaMotoristaState createState() => RotaMotoristaState();
 }
 
+// Backwards-compatible alias: some older files/routes reference `HomeScreen`.
+// Keep this thin wrapper so callers can use `HomeScreen()` without renaming
+// the existing implementation.
+class HomeScreen extends RotaMotorista {
+  const HomeScreen({super.key});
+}
+
 class RotaMotoristaState extends State<RotaMotorista>
     with SingleTickerProviderStateMixin {
   final String nomeMotorista = "LEANDRO";

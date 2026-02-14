@@ -113,7 +113,7 @@ class SupabaseService {
             'lng': longitude.toString(),
             'status': status,
             'esta_online': estaOnline,
-            'ultima_atualizacao': DateTime.now().toIso8601String(),
+            'ultima_atualizacao': DateTime.now().toUtc().toIso8601String(),
           })
           .eq('id', motoristaId);
     } catch (e) {

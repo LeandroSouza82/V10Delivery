@@ -5,6 +5,7 @@ import 'package:v10_delivery/services/supabase_service.dart';
 import 'package:flutter/services.dart';
 import 'package:v10_delivery/register_page.dart';
 import 'package:v10_delivery/globals.dart';
+import 'package:v10_delivery/screens/home_screen.dart';
 // estilos e utilitários importados por outras telas — removidos daqui para evitar warnings
 
 const String kLogoPath = 'assets/images/v10_delivery.jpg';
@@ -152,10 +153,30 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setString('driver_name', nome);
         nomeMotorista = nome;
 
+        // Marcar motorista como online no Supabase com timestamp UTC
+        final ts = DateTime.now().toUtc().toIso8601String();
+        final payloadOnline = {
+          'esta_online': true,
+          'ultima_atualizacao': ts,
+        };
+        try {
+          if (recUuid != null && recUuid.isNotEmpty) {
+            await SupabaseService.client.from('motoristas').update(payloadOnline).eq('uuid', recUuid);
+          } else if (recId > 0) {
+            await SupabaseService.client.from('motoristas').update(payloadOnline).eq('id', recId);
+          }
+        } catch (e) {
+          debugPrint('Erro atualizando esta_online no login: $e');
+        }
+
         if (!mounted) {
           return;
         }
-        Navigator.pushReplacementNamed(context, '/rota');
+        // Navigate directly to HomeScreen (alias for RotaMotorista)
+        await Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
         return;
       } catch (e) {
         debugPrint('Erro durante busca/autenticação de teste: $e');
@@ -209,7 +230,10 @@ class _LoginPageState extends State<LoginPage> {
         if (!mounted) {
           return;
         }
-        await Navigator.pushReplacementNamed(context, '/rota');
+        await Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
       }
     } catch (e) {
       debugPrint(e.toString());
