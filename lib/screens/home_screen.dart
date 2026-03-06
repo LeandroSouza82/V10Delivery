@@ -175,21 +175,11 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Função utilitária local para enviar WhatsApp (usa url_launcher)
   Future<void> enviarWhatsApp(String mensagem, {String? phone}) async {
     try {
-      final String phoneRaw = (phone ?? numeroGestor)
-          .replaceAll('+', '')
-          .replaceAll(' ', '');
+      // Garante que só números vão para o wa.me
+      final String phoneRaw = (phone ?? numeroGestor).replaceAll(RegExp(r'[^0-9]'), '');
       final String encoded = Uri.encodeComponent(mensagem);
-      final Uri native = Uri.parse(
-        'whatsapp://send?phone=$phoneRaw&text=$encoded',
-      );
-      final Uri web = Uri.parse(
-        'https://api.whatsapp.com/send?phone=$phoneRaw&text=$encoded',
-      );
-      if (await canLaunchUrl(native)) {
-        await launchUrl(native, mode: LaunchMode.externalApplication);
-        return;
-      }
-      await launchUrl(web, mode: LaunchMode.externalApplication);
+      final Uri wa = Uri.parse('https://wa.me/$phoneRaw?text=$encoded');
+      await launchUrl(wa, mode: LaunchMode.externalApplication);
     } catch (e) {
       debugPrint('Erro ao abrir WhatsApp (local): $e');
     }
@@ -1210,15 +1200,17 @@ class RotaMotoristaState extends State<RotaMotorista>
   Future<String> _getTelefoneGestor() async {
     try {
       final dynamic q = await Supabase.instance.client
-          .from('config_geral')
-          .select('telefone_gestor')
-          .limit(1)
-          .maybeSingle();
+          .from('configuracoes')
+          .select('valor')
+          .eq('chave', 'gestor_phone')
+          .single();
       if (q != null) {
-        final map = q as Map<dynamic, dynamic>;
-        final val = map['telefone_gestor'] ?? map['telefone'] ?? map['contato'];
-        if (val != null && val.toString().isNotEmpty) {
-          return val.toString();
+        if (q is Map &&
+            q['valor'] != null &&
+            q['valor'].toString().isNotEmpty) {
+          return q['valor'].toString();
+        } else if (q is String && q.isNotEmpty) {
+          return q;
         }
       }
     } catch (_) {}
@@ -1275,6 +1267,10 @@ class RotaMotoristaState extends State<RotaMotorista>
         final mensagem =
             '📦 ENTREGA CONCLUÍDA: $clienteNome\nMotorista: $driverName\nHora: $hora';
         await enviarWhatsApp(mensagem, phone: phone);
+        // Limpa estado e volta para tela inicial após retorno do WhatsApp
+        if (ctx.mounted) {
+          Navigator.of(ctx).popUntil((route) => route.isFirst);
+        }
       } catch (e) {
         debugPrint('Erro ao notificar gestor: $e');
       }

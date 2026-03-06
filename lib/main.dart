@@ -23,6 +23,7 @@ import 'dart:convert';
 import 'location_service.dart';
 
 import 'services/cache_service.dart';
+import 'services/offline_sync_service.dart';
 import 'widgets/avisos_modal.dart';
 // import 'package:v10_delivery/auth_pages.dart'; // removido: arquivo não existe no workspace
 import 'globals.dart';
@@ -1184,10 +1185,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     });
     // iniciar cache service (não bloqueante)
     CacheService().init().catchError((e) => debugPrint('Cache init error: $e'));
-    // Manter a tela acesa enquanto o app estiver em primeiro plano
-    try {
-      WakelockPlus.enable();
-    } catch (_) {}
+    // Manter tela acesa e solicitar isenção de bateria
+    _blindarAppContraHibernacao();
     super.initState();
     // Carregar driver_id das SharedPreferences o quanto antes (não-bloqueante)
     SharedPreferences.getInstance().then((prefs) async {
@@ -1458,6 +1457,33 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {}
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  /// Mantém a tela acesa e solicita isenção de otimização de bateria do SO.
+  /// Deve ser chamado no initState. Usa somente pacotes já presentes no projeto.
+  Future<void> _blindarAppContraHibernacao() async {
+    // 1. Proíbe a tela de apagar enquanto o app estiver ativo
+    try {
+      await WakelockPlus.enable();
+      debugPrint('🛡️ Wakelock ativado: a tela não vai mais apagar.');
+    } catch (e) {
+      debugPrint('Erro ao ativar WakelockPlus: $e');
+    }
+
+    // 2. Solicita isenção de economia de bateria (crucial para GPS/polling em BG)
+    if (!Platform.isAndroid) return;
+    try {
+      final ignoring =
+          await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+      if (!ignoring) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+        debugPrint('🔋 Solicitação de isenção de bateria enviada ao sistema.');
+      } else {
+        debugPrint('✅ App já está isento de otimização de bateria.');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Erro ao solicitar isenção de bateria: $e');
+    }
   }
 
   Future<void> _startForegroundService() async {
@@ -1777,7 +1803,7 @@ class RotaMotoristaState extends State<RotaMotorista>
 
     return Container(
       width: 100,
-      height: 100,
+      constraints: const BoxConstraints(minHeight: 80),
       decoration: BoxDecoration(
         color: backgroundColor,
         borderRadius: BorderRadius.circular(12),
@@ -1786,22 +1812,35 @@ class RotaMotoristaState extends State<RotaMotorista>
         ],
         border: Border.all(color: borderColor, width: 2.0),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: textColor, size: 30),
-          const SizedBox(height: 8),
-          Text(
-            '$count',
-            style: TextStyle(
-              color: textColor,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: textColor, size: 26),
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(label, style: TextStyle(color: subtitleColor, fontSize: 12)),
-        ],
+            const SizedBox(height: 2),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                style: TextStyle(color: subtitleColor, fontSize: 11),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1842,7 +1881,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     final hasPhoto = imagemFalha != null;
 
     final report =
-        '*Status:* falha\n'
+        '*Status:* ❌ Falha\n'
         '*Motivo:* $motivoFinal\n'
         '${detalhesObs.isNotEmpty ? '*Detalhes:* $detalhesObs\n' : ''}'
         '*Cliente:* $cliente\n'
@@ -1857,6 +1896,22 @@ class RotaMotoristaState extends State<RotaMotorista>
       // ignorar
     }
 
+    // Capturar localização exata do motorista no momento da ocorrência
+    double? latFalha;
+    double? lngFalha;
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 5),
+        ),
+      );
+      latFalha = pos.latitude;
+      lngFalha = pos.longitude;
+    } catch (_) {
+      // GPS indisponível — coordenadas ficam nulas
+    }
+
     // 1) SALVAR no Supabase primeiro (ordem de segurança requerida)
     try {
       await Supabase.instance.client
@@ -1865,10 +1920,19 @@ class RotaMotoristaState extends State<RotaMotorista>
             'status': 'falha',
             'obs': detalhesObs,
             'data_conclusao': DateTime.now().toIso8601String(),
+            if (latFalha != null) 'lat_conclusao': latFalha,
+            if (lngFalha != null) 'lng_conclusao': lngFalha,
           })
           .eq('id', cardId);
     } catch (e) {
       debugPrint('Erro ao salvar falha no Supabase: $e');
+      // Salvar offline para sincronizar quando a conexão voltar
+      await OfflineSyncService.salvarAcaoOffline(
+        cardId,
+        'falha',
+        lat: latFalha,
+        lng: lngFalha,
+      );
     }
 
     // 2) Atualizar UI local e persistir estado
@@ -2045,6 +2109,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   void _buildFailModal(BuildContext ctx, Map<String, dynamic> item) {
     // ignore: unused_local_variable
     final String nomeCliente = item['cliente'] ?? '';
+    final bool isAta =
+        (item['tipo'] ?? '').toString().trim().toLowerCase() == 'outros';
     _resetModalPhotos();
     String? motivoSelecionadoLocal;
     String obsTexto = '';
@@ -2063,7 +2129,7 @@ class RotaMotoristaState extends State<RotaMotorista>
               'Recusou Entrega',
               'Mudou-se',
               'Área de Risco',
-              'Veículo Quebrado',
+              isAta ? 'Falta de documentos' : 'Veículo Quebrado',
               'Outro Motivo',
             ];
 
@@ -2307,14 +2373,20 @@ class RotaMotoristaState extends State<RotaMotorista>
                               final hora = DateFormat(
                                 'HH:mm',
                               ).format(DateTime.now());
-                              final report =
-                                  '*Status:* falha\n'
-                                  '*Motivo:* $motivoFinal\n'
-                                  '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
-                                  '*Cliente:* $cliente\n'
-                                  '*Endereço:* $endereco\n'
-                                  '*Motorista:* $nomeMotorista\n'
-                                  '*Hora:* $hora';
+                              final report = isAta
+                                  ? '⚠️ ATA NÃO REGISTRADA ❌\n'
+                                        '*Motivo:* $motivoFinal\n'
+                                        '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
+                                        '*Local:* $endereco\n'
+                                        '*Motorista:* $nomeMotorista\n'
+                                        '*Hora:* $hora'
+                                  : '*Status:* ❌ Falha\n'
+                                        '*Motivo:* $motivoFinal\n'
+                                        '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
+                                        '*Cliente:* $cliente\n'
+                                        '*Endereço:* $endereco\n'
+                                        '*Motorista:* $nomeMotorista\n'
+                                        '*Hora:* $hora';
 
                               try {
                                 if (imagemFalha != null) {
@@ -2389,6 +2461,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   void _buildSuccessModal(BuildContext ctx, Map<String, dynamic> item) {
     // ignore: unused_local_variable
     final String nomeCliente = item['cliente'] ?? '';
+    final bool isAta =
+        (item['tipo'] ?? '').toString().trim().toLowerCase() == 'outros';
     _resetModalPhotos();
     String? opcaoSelecionada;
     String obsTexto = '';
@@ -2498,7 +2572,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                               width: 120,
                               child: TextField(
                                 controller: moradorController,
-                                keyboardType: TextInputType.phone,
+                                keyboardType: TextInputType.text,
                                 style: TextStyle(color: textColor),
                                 decoration: InputDecoration(
                                   hintText: 'Nº',
@@ -2615,10 +2689,18 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     orElse: () => {'endereco': ''},
                                   )['endereco'];
 
-                                  final mensagem =
-                                      '*Status:* Sucesso\n'
-                                      '*Recebido por:* $recebidoPor\n'
-                                      '*Cliente:* $nomeCliente | *Endereço:* ${enderecoCliente ?? ''} | *Motorista:* $nomeMotorista | *Hora:* $hora';
+                                  final mensagem = isAta
+                                      ? '📄 ATA REGISTRADA COM SUCESSO ✅\n'
+                                            '*Local:* $nomeCliente\n'
+                                            '*Endereço:* ${enderecoCliente ?? ''}\n'
+                                            '*Motorista:* $nomeMotorista\n'
+                                            '*Hora:* $hora'
+                                      : '*Status:* ✅ Sucesso\n'
+                                            '*Recebido por:* $recebidoPor\n'
+                                            '*Cliente:* $nomeCliente\n'
+                                            '*Endereço:* ${enderecoCliente ?? ''}\n'
+                                            '*Motorista:* $nomeMotorista\n'
+                                            '*Hora:* $hora';
 
                                   // anexar foto se existente (capturada aqui ou em sessão)
                                   final List<XFile> files = [];
@@ -2643,9 +2725,25 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     }
                                   } catch (_) {}
 
+                                  // Capturar localização exata no momento da entrega OK
+                                  double? latOk;
+                                  double? lngOk;
+                                  try {
+                                    final pos =
+                                        await Geolocator.getCurrentPosition(
+                                          locationSettings:
+                                              const LocationSettings(
+                                                accuracy: LocationAccuracy.high,
+                                                timeLimit: Duration(seconds: 5),
+                                              ),
+                                        );
+                                    latOk = pos.latitude;
+                                    lngOk = pos.longitude;
+                                  } catch (_) {}
+
                                   // Persistir no Supabase com as chaves corretas (id, cliente, endereco, tipo, obs)
                                   final idItem = item['id'];
-                                  final payload = {
+                                  final payload = <String, dynamic>{
                                     'cliente': item['cliente'] ?? '',
                                     'endereco': item['endereco'] ?? '',
                                     'tipo_recebedor': opcaoSelecionada ?? '',
@@ -2653,6 +2751,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     'data_conclusao': DateTime.now()
                                         .toIso8601String(),
                                     'status': 'entregue',
+                                    if (latOk != null) 'lat_conclusao': latOk,
+                                    if (lngOk != null) 'lng_conclusao': lngOk,
                                   };
 
                                   try {
@@ -2666,6 +2766,13 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     } catch (e) {
                                       // Log específico solicitado
                                       debugPrint('ERRO NO UPDATE: $e');
+                                      // Salvar offline para sincronizar quando a conexão voltar
+                                      await OfflineSyncService.salvarAcaoOffline(
+                                        idItem.toString(),
+                                        'entregue',
+                                        lat: latOk,
+                                        lng: lngOk,
+                                      );
                                       rethrow;
                                     }
 
@@ -3139,6 +3246,8 @@ class RotaMotoristaState extends State<RotaMotorista>
 
         _reconnectTimer?.cancel();
         debugPrint('Conexão estabelecida com sucesso!');
+        // Aproveita o retorno da conexão para sincronizar ações salvas offline
+        OfflineSyncService.sincronizarPendentes();
       }
     } on SocketException catch (_) {
       if (!mounted) return;
@@ -3325,9 +3434,9 @@ class RotaMotoristaState extends State<RotaMotorista>
       key: _scaffoldKey,
       backgroundColor: Colors.white,
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(
-          180.0,
-        ), // Altura ajustada para os cards
+        preferredSize: Size.fromHeight(
+          MediaQuery.of(context).padding.top + 175.0,
+        ), // Altura dinâmica: statusBar + conteúdo (evita overflow)
         child: AnnotatedRegion<SystemUiOverlayStyle>(
           value: modoDia
               ? SystemUiOverlayStyle.dark
@@ -3674,7 +3783,41 @@ class RotaMotoristaState extends State<RotaMotorista>
                   ),
                   onTap: () async {
                     Navigator.pop(context);
-                    await carregarDados();
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Sincronizando dados offline... ⏳'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+
+                    try {
+                      await OfflineSyncService.sincronizarPendentes();
+                      await carregarDados();
+
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Sincronização concluída com sucesso! ✅',
+                            ),
+                            backgroundColor: Colors.green,
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text(
+                              'Não foi possível sincronizar agora. Verifique a internet. 📶❌',
+                            ),
+                            backgroundColor: Colors.red.shade800,
+                          ),
+                        );
+                      }
+                    }
                   },
                 ),
                 SizedBox.shrink(),
@@ -4125,7 +4268,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Cabeçalho compacto: número da ordem_logistica e tipo na mesma linha
+                    // Cabeçalho compacto: número visual (posição na fila) e tipo na mesma linha
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
@@ -4138,7 +4281,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                           ),
                           child: Center(
                             child: Text(
-                              (item['ordem_logistica'] ?? '?').toString(),
+                              // Fila viva: usa posição real na lista (ignora ordem_logistica do banco)
+                              '${index + 1}',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
@@ -4211,7 +4355,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                       ),
                     ),
 
-                    // Observações/aviso do gestor (usar obrigatoriamente 'observacoes')
+                    // Aviso do gestor: exibido em destaque laranja apenas quando há conteúdo
                     Builder(
                       builder: (ctx) {
                         final obs =
@@ -4219,44 +4363,57 @@ class RotaMotoristaState extends State<RotaMotorista>
                             item['observacao'] ??
                             item['obs'] ??
                             '';
-                        final displayText =
-                            'Gestor: ${obs.toString().trim().isNotEmpty ? obs : 'Sem avisos no DB'}';
+                        final obsTexto = obs.toString().trim();
 
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: Container(
-                            padding: EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.blue[50],
-                              borderRadius: BorderRadius.only(
-                                topLeft: Radius.circular(12),
-                                topRight: Radius.circular(12),
-                                bottomRight: Radius.circular(12),
-                                bottomLeft: Radius.circular(0),
+                        if (obsTexto.isEmpty) return const SizedBox.shrink();
+
+                        return Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(top: 8.0, bottom: 8.0),
+                          padding: const EdgeInsets.all(12.0),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            border: Border.all(
+                              color: Colors.orange.shade700,
+                              width: 1.5,
+                            ),
+                            borderRadius: BorderRadius.circular(8.0),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                color: Colors.orange.shade800,
+                                size: 22,
                               ),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.chat_bubble_outline,
-                                  size: 16,
-                                  color: Colors.blueGrey,
-                                ),
-                                SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    displayText,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: Colors.black87,
-                                      fontWeight: FontWeight.w600,
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'AVISO DO GESTOR:',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w900,
+                                        color: Colors.orange.shade900,
+                                        letterSpacing: 0.5,
+                                      ),
                                     ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      obsTexto,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         );
                       },
@@ -4303,7 +4460,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                           ),
                         ),
                         SizedBox(width: 6),
-                        Expanded(
+                        Flexible(
+                          fit: FlexFit.loose,
                           child: SizedBox(
                             height: 42,
                             child: ElevatedButton.icon(
@@ -4312,11 +4470,16 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 color: Colors.white,
                                 size: 16,
                               ),
-                              label: Text(
-                                'FALHA',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
+                              label: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  'FALHA',
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ),
                               style: ElevatedButton.styleFrom(
@@ -4324,7 +4487,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(28),
                                 ),
-                                padding: EdgeInsets.symmetric(horizontal: 8),
+                                padding: EdgeInsets.symmetric(
+                                  vertical: 8,
+                                  horizontal: 4,
+                                ),
                               ),
                               onPressed: () {
                                 try {
@@ -4355,11 +4521,16 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 color: Colors.white,
                                 size: 16,
                               ),
-                              label: Text(
-                                'OK',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
+                              label: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  tipoTratado == 'outros'
+                                      ? 'ATA REGISTRADA / OK'
+                                      : 'OK',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                               style: ElevatedButton.styleFrom(
@@ -4403,16 +4574,33 @@ class RotaMotoristaState extends State<RotaMotorista>
   Future<void> _abrirMapaComPreferencia(String endereco) async {
     final encoded = Uri.encodeComponent(endereco);
 
-    final googleMapsUrl =
-        'https://www.google.com/maps/dir/?api=1&destination=$encoded';
+    // Respeita a preferência salva pelo motorista (Waze ou Google Maps)
+    final appMapa = (_selectedMapName ?? '').toLowerCase();
+
+    final Uri uri;
+    if (appMapa.contains('waze')) {
+      // Waze: abre navegação direta pelo endereço em texto
+      uri = Uri.parse('https://waze.com/ul?q=$encoded&navigate=yes');
+    } else {
+      // Google Maps (padrão): rota por texto
+      uri = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$encoded',
+      );
+    }
+
     try {
-      final uri = Uri.parse(googleMapsUrl);
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
-        if (mounted) {
+        // Fallback: se o app preferido não abrir, tenta Google Maps
+        final fallback = Uri.parse(
+          'https://www.google.com/maps/dir/?api=1&destination=$encoded',
+        );
+        if (await canLaunchUrl(fallback)) {
+          await launchUrl(fallback, mode: LaunchMode.externalApplication);
+        } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Não foi possível abrir o mapa.')),
+            const SnackBar(content: Text('Não foi possível abrir o mapa.')),
           );
         }
       }
