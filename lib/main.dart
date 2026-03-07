@@ -3310,11 +3310,12 @@ class RotaMotoristaState extends State<RotaMotorista>
             debugPrint('📍 Erro ao forçar posição em carregarDados: $e');
           }
         }
-        // Geocodificar endereços em background e, quando concluído, ordenar por distância.
+        // Geocodificar endereços em background.
         // NÃO limpar os caches aqui: preservar as distâncias já calculadas para
         // evitar flickering dos badges durante o polling. O cache só é invalidado
         // para IDs novos ou com endereço alterado (lógica em _geocodificarEntregas).
-        _geocodificarEntregas(lista).then((_) => _ordenarPorDistancia());
+        // A ordem da lista segue estritamente o banco de dados (sem reordenação).
+        _geocodificarEntregas(lista);
         debugPrint('✅ Dados carregados: ${lista.length} registros');
         // Log produtivo de sucesso do polling
         debugPrint(
@@ -4596,35 +4597,6 @@ class RotaMotoristaState extends State<RotaMotorista>
       // Pequena pausa para não saturar o servidor OSRM público
       await Future.delayed(const Duration(milliseconds: 300));
     }
-    // Após recalcular todas as distâncias, reordenar os cards
-    _ordenarPorDistancia();
-  }
-
-  /// Reordena a lista de entregas pela distância real por vias (menor primeiro).
-  /// Entregas sem distância calculada ficam no final, mantendo sua ordem relativa.
-  void _ordenarPorDistancia() {
-    if (!mounted) return;
-    // Converte o texto do badge ("1,2 km", "350 m") em metros para comparar
-    double textoParaMetros(String? texto) {
-      if (texto == null) return double.infinity;
-      final t = texto.replaceAll(',', '.').trim();
-      if (t.endsWith('km')) {
-        return (double.tryParse(t.replaceAll('km', '').trim()) ?? double.infinity) * 1000;
-      } else if (t.endsWith('m')) {
-        return double.tryParse(t.replaceAll('m', '').trim()) ?? double.infinity;
-      }
-      return double.infinity;
-    }
-
-    setState(() {
-      entregas.sort((a, b) {
-        final idA = (a as Map<String, String>?)?['id'] ?? '';
-        final idB = (b as Map<String, String>?)?['id'] ?? '';
-        final dA = textoParaMetros(_roadDistanceCache[idA]);
-        final dB = textoParaMetros(_roadDistanceCache[idB]);
-        return dA.compareTo(dB);
-      });
-    });
   }
 
   Widget _buildCard(Map<String, String> item, int index) {
