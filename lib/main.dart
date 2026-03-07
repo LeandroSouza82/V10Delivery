@@ -4175,23 +4175,11 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   ),
                                 ),
                                 SizedBox(height: 32),
-                                ElevatedButton.icon(
-                                  icon: const Icon(
-                                    Icons.business,
-                                    color: Colors.white,
-                                  ),
-                                  label: const Text(
-                                    'RETORNAR PARA A EMPRESA 🏢',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 15,
-                                    ),
-                                  ),
+                                ElevatedButton(
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.green.shade600,
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 24,
+                                      horizontal: 32,
                                       vertical: 14,
                                     ),
                                     shape: RoundedRectangleBorder(
@@ -4200,6 +4188,27 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   ),
                                   onPressed: () => _abrirMapaComPreferencia(
                                     '$_baseLat,$_baseLng',
+                                  ),
+                                  child: const Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        'RETORNAR PARA A EMPRESA',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                      SizedBox(height: 4),
+                                      Icon(
+                                        Icons.business,
+                                        color: Colors.white,
+                                        size: 28,
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ],
@@ -4220,23 +4229,11 @@ class RotaMotoristaState extends State<RotaMotorista>
                               children: [
                                 const Text('Nenhuma entrega disponível'),
                                 const SizedBox(height: 32),
-                                ElevatedButton.icon(
-                                  icon: const Icon(
-                                    Icons.business,
-                                    color: Colors.white,
-                                  ),
-                                  label: const Text(
-                                    'RETORNAR PARA A EMPRESA 🏢',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 15,
-                                    ),
-                                  ),
+                                ElevatedButton(
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.green.shade600,
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 24,
+                                      horizontal: 32,
                                       vertical: 14,
                                     ),
                                     shape: RoundedRectangleBorder(
@@ -4245,6 +4242,27 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   ),
                                   onPressed: () => _abrirMapaComPreferencia(
                                     '$_baseLat,$_baseLng',
+                                  ),
+                                  child: const Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        'RETORNAR PARA A EMPRESA',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                      SizedBox(height: 4),
+                                      Icon(
+                                        Icons.business,
+                                        color: Colors.white,
+                                        size: 28,
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ],
