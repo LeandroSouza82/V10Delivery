@@ -604,10 +604,14 @@ class RotaMotoristaState extends State<RotaMotorista>
             prefs.getString('driver_uuid') ??
             Supabase.instance.client.auth.currentUser?.id;
         if (idLogado != null && idLogado.isNotEmpty) break;
-        debugPrint('⏳ _initEntregasRealtime: aguardando UUID (tentativa ${tentativa + 1}/8)...');
+        debugPrint(
+          '⏳ _initEntregasRealtime: aguardando UUID (tentativa ${tentativa + 1}/8)...',
+        );
         await Future.delayed(const Duration(seconds: 1));
       }
-      final dbgUuid = (await SharedPreferences.getInstance()).getString('driver_uuid');
+      final dbgUuid = (await SharedPreferences.getInstance()).getString(
+        'driver_uuid',
+      );
       final dbgAuthId = Supabase.instance.client.auth.currentUser?.id;
       debugPrint(
         '🆔 _initEntregasRealtime: driver_uuid=$dbgUuid | auth.id=$dbgAuthId | usando=$idLogado',
