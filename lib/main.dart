@@ -671,7 +671,8 @@ class RotaMotoristaState extends State<RotaMotorista>
             (Position pos) async {
               // Atualizar posição atual para distância nos cards
               if (mounted) setState(() => _currentPosition = pos);
-              // Recalcular distâncias OSRM se o motorista se deslocou mais de 100 m
+              // Recalcular distâncias OSRM apenas se o motorista se deslocou mais de 500 m.
+              // Threshold alto evita que variações de sinal GPS causem flickering contínuo.
               final anterior = _lastOsrmPosition;
               if (anterior == null ||
                   Geolocator.distanceBetween(
@@ -680,7 +681,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                         pos.latitude,
                         pos.longitude,
                       ) >
-                      100) {
+                      500) {
                 _recalcularTodasOsrm();
               }
               try {
@@ -3307,13 +3308,10 @@ class RotaMotoristaState extends State<RotaMotorista>
             debugPrint('📍 Erro ao forçar posição em carregarDados: $e');
           }
         }
-        // Geocodificar endereços em background para exibir distância nos cards
-        // Limpar caches para forçar recálculo com lógica de limpeza atualizada
-        for (final it in lista) {
-          final rid = it['id'] ?? '';
-          _geocodeCache.remove(rid);
-          _roadDistanceCache.remove(rid);
-        }
+        // Geocodificar endereços em background para exibir distância nos cards.
+        // NÃO limpar os caches aqui: preservar as distâncias já calculadas para
+        // evitar flickering dos badges durante o polling. O cache só é invalidado
+        // para IDs novos (ainda não presentes), que _geocodificarEntregas já trata.
         _geocodificarEntregas(lista);
         debugPrint('✅ Dados carregados: ${lista.length} registros');
         // Log produtivo de sucesso do polling
