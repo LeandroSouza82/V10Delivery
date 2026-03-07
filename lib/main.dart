@@ -4375,35 +4375,54 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  /// Limpa um endereço antes de enviar ao Nominatim (remove complementos).
-  /// O motorista NUNCA vê essa string — ela afeta apenas a chamada de API.
+  /// Higieniza um endereço antes de enviar ao Nominatim.
+  /// Remove complementos internos (sala, apto, bloco…) mas PRESERVA bairro e cidade
+  /// que já estejam na string. Ancora ao estado para cobrir toda a Grande Florianópolis
+  /// (Florianópolis, São José, Palhoça, Biguaçu, etc.) sem fixar uma cidade única.
   ///
-  /// Exemplo:
-  ///   Entrada: "Av. Pres. Kennedy 1333 sala 308 - Campinas"
-  ///   Saída:   "Av. Pres. Kennedy 1333, Brasil"
+  /// Exemplos:
+  ///   "Av. Presidente Kennedy 1333 sala 308, Campinas, São José"
+  ///   → "Av. Presidente Kennedy 1333, Campinas, São José, Santa Catarina, Brasil"
+  ///
+  ///   "Rua das Flores, 50 - Apto 201 - Florianópolis"
+  ///   → "Rua das Flores, 50, Florianópolis, Santa Catarina, Brasil"
   String _limparEndereco(String raw) {
-    // 1. Cortar tudo a partir de complementos
-    var s = raw.replaceAll(
+    // 1. Identificar e remover complemento + tudo que ele arrasta consigo,
+    //    mas guardar o que há DEPOIS da vírgula seguinte (bairro/cidade).
+    //
+    //    Estratégia: substituir apenas o trecho "separador? + complemento + valor"
+    //    até a próxima vírgula, mantendo o restante da string intacto.
+    var s = raw.replaceAllMapped(
       RegExp(
-        r'\s*[,\-\/]?\s*'
-        r'(sala|ap\.?|apto\.?|apartamento|bloco|bl\.?|'
-        r'fundos|loja|andar|pavto?\.?|pavimento|'
-        r'conj\.?|conjunto|unidade|un\.?|cj\.?)'
-        r'\b.*',
+        // separador opcional antes do complemento
+        r'(\s*[,\-\/]?\s*)'
+        // palavra-chave do complemento
+        r'(sala|ap\.?|apto\.?|apartamento|bloco|bl\.?|fundos|loja|'
+        r'andar|pavto?\.?|pavimento|conj\.?|conjunto|unidade|un\.?|cj\.?|nr\.?)'
+        // valor do complemento: tudo até a próxima vírgula ou fim da string
+        r'[^\,]*',
         caseSensitive: false,
       ),
-      '',
+      (m) {
+        // Se o separador capturado era uma vírgula, preservá-la para não
+        // colar o bairro/cidade no número sem pontuação.
+        final sep = m.group(1) ?? '';
+        return sep.contains(',') ? ',' : '';
+      },
     );
 
-    // 2. Cortar traço ou barra solto no final (ex: "Rua X, 10 -")
-    s = s.replaceAll(RegExp(r'[\-\/,]\s*$'), '').trim();
+    // 2. Limpar barras ou traços soltos que possam ter ficado no final de token
+    s = s.replaceAll(RegExp(r'\s*[\-\/]\s*(?=,|$)'), '');
 
-    // 3. Colapsar espaços múltiplos
+    // 3. Normalizar vírgulas múltiplas e espaços extras
+    s = s.replaceAll(RegExp(r',\s*,'), ',');
     s = s.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
 
-    // 4. Ancorar apenas ao país para não forçar cidade errada
-    //    (endereços podem ser em qualquer cidade da região)
-    return '$s, Brasil';
+    // 4. Remover vírgula ou traço no final absoluto
+    s = s.replaceAll(RegExp(r'[,\-]\s*$'), '').trim();
+
+    // 5. Ancoragem ao estado — cobre toda a Grande Florianópolis sem fixar cidade
+    return '$s, Santa Catarina, Brasil';
   }
 
   /// Geocodifica endereços via Nominatim e, logo após obter as coordenadas,
