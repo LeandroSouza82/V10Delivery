@@ -17,7 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart' show locationFromAddress, Location;
+import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'location_service.dart';
@@ -4326,15 +4326,13 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  /// Geocodifica os endereços das entregas em background e armazena no cache.
-  /// Só processa IDs ainda não presentes no cache; chamadas repetidas são baratas.
+  /// Geocodifica os endereços das entregas via Nominatim (OpenStreetMap) — sem plugin nativo.
   Future<void> _geocodificarEntregas(List<Map<String, String>> lista) async {
     for (final item in lista) {
       final id = item['id'] ?? '';
-      // Pular se já tentamos (valor null = falhou antes; value definido = ok)
       if (_geocodeCache.containsKey(id)) continue;
 
-      // Tentar usar lat/lng da própria entrega primeiro
+      // Usar lat/lng do banco se disponíveis
       final lat = double.tryParse(item['latitude'] ?? '');
       final lng = double.tryParse(item['longitude'] ?? '');
       if (lat != null && lng != null) {
@@ -4343,21 +4341,45 @@ class RotaMotoristaState extends State<RotaMotorista>
         continue;
       }
 
-      // Fallback: geocodificar pelo endereço
       final endereco = item['endereco'] ?? '';
       if (endereco.isEmpty) {
         debugPrint('📍 GEO-CHECK: id=$id endereço vazio, pulando.');
         _geocodeCache[id] = null;
         continue;
       }
+
       try {
-        final List<Location> locs = await locationFromAddress(endereco);
-        debugPrint('📍 GEO-CHECK: [$endereco] -> $locs');
-        if (locs.isNotEmpty) {
-          _geocodeCache[id] = (locs.first.latitude, locs.first.longitude);
-          debugPrint('📍 GEO-CHECK: cache salvo -> (${locs.first.latitude}, ${locs.first.longitude})');
+        final query = Uri.encodeComponent('$endereco, Brasil');
+        final url = Uri.parse(
+          'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1',
+        );
+        final response = await http.get(
+          url,
+          headers: {'User-Agent': 'V10Delivery/1.0'},
+        );
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body) as List<dynamic>;
+          debugPrint(
+            '📍 GEO-CHECK: [$endereco] -> ${data.isEmpty ? 'sem resultado' : data.first}',
+          );
+          if (data.isNotEmpty) {
+            final coordLat = double.tryParse(
+              data.first['lat']?.toString() ?? '',
+            );
+            final coordLng = double.tryParse(
+              data.first['lon']?.toString() ?? '',
+            );
+            if (coordLat != null && coordLng != null) {
+              _geocodeCache[id] = (coordLat, coordLng);
+              debugPrint('📍 GEO-CHECK: cache salvo -> ($coordLat, $coordLng)');
+            } else {
+              _geocodeCache[id] = null;
+            }
+          } else {
+            _geocodeCache[id] = null;
+          }
         } else {
-          debugPrint('📍 GEO-CHECK: [$endereco] -> lista vazia, sem coords.');
+          debugPrint('📍 GEO-CHECK: [$endereco] -> HTTP ${response.statusCode}');
           _geocodeCache[id] = null;
         }
       } catch (e) {
@@ -4365,8 +4387,8 @@ class RotaMotoristaState extends State<RotaMotorista>
         _geocodeCache[id] = null;
       }
       if (mounted) setState(() {});
-      // Pequeno delay para não sobrecarregar o serviço de geocodificação
-      await Future.delayed(const Duration(milliseconds: 300));
+      // Respeitar rate-limit do Nominatim (máx 1 req/s)
+      await Future.delayed(const Duration(milliseconds: 1100));
     }
   }
 
@@ -4393,7 +4415,9 @@ class RotaMotoristaState extends State<RotaMotorista>
     final Color textSecondary = Colors.black87;
 
     // Calcular distância entre motorista e entrega
-    debugPrint('📡 GPS ATUAL: $_currentPosition | cache[${item['id']}]=${_geocodeCache[item['id']]}');
+    debugPrint(
+      '📡 GPS ATUAL: $_currentPosition | cache[${item['id']}]=${_geocodeCache[item['id']]}',
+    );
     String? distanciaTexto;
     if (_currentPosition != null) {
       final id = item['id'] ?? '';
