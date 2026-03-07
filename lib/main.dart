@@ -2521,6 +2521,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                               ).format(DateTime.now());
                               final report = isAta
                                   ? '⚠️ ATA NÃO REGISTRADA ❌\n'
+                                        '*Cliente:* $cliente\n'
                                         '*Motivo:* $motivoFinal\n'
                                         '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
                                         '*Local:* $endereco\n'
@@ -2826,7 +2827,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     orElse: () => {'endereco': ''},
                                   )['endereco'];
 
-                                  final rotuloLocal = (opcaoSelecionada == 'OUTROS') ? 'Cliente' : 'Local';
+                                  final rotuloLocal =
+                                      (opcaoSelecionada == 'OUTROS')
+                                      ? 'Cliente'
+                                      : 'Local';
                                   final mensagem = isAta
                                       ? '📄 ATA REGISTRADA COM SUCESSO ✅\n'
                                             '*$rotuloLocal:* $nomeCliente\n'
