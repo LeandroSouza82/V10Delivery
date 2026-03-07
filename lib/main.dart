@@ -1389,15 +1389,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         setState(() => _esquemaCores = 1);
       }
     });
-    // Carregar preferência de modo offline (default false)
-    SharedPreferences.getInstance().then((prefs) {
-      final mo = prefs.getBool('modo_offline');
-      if (mo != null) {
-        setState(() => modoOffline = mo);
-      } else {
-        setState(() => modoOffline = false);
-      }
-    });
+    // modoOffline é sempre false ao iniciar — nunca persistido em SharedPreferences
     // DEBUG: abrir Drawer automaticamente se a flag estiver setada nas prefs
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
@@ -3297,7 +3289,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       _atualizarContadores();
 
       _reconnectTimer?.cancel();
-      _reconnectTimer = Timer.periodic(const Duration(seconds: 30), (t) async {
+      _reconnectTimer = Timer.periodic(const Duration(seconds: 10), (t) async {
         if (!mounted) {
           t.cancel();
           return;
@@ -3307,22 +3299,10 @@ class RotaMotoristaState extends State<RotaMotorista>
         } catch (_) {}
         if (!modoOffline) t.cancel();
       });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => modoOffline = true);
-      _setEntregas([]);
-      _atualizarContadores();
-      _reconnectTimer?.cancel();
-      _reconnectTimer = Timer.periodic(const Duration(seconds: 30), (t) async {
-        if (!mounted) {
-          t.cancel();
-          return;
-        }
-        try {
-          await carregarDados();
-        } catch (_) {}
-        if (!modoOffline) t.cancel();
-      });
+    } catch (e) {
+      // Erro não relacionado à rede (ex: Supabase, parsing) — NÃO ativa offline
+      // apenas loga e aguarda o próximo ciclo de polling
+      debugPrint('⚠️ carregarDados(): erro não-rede ignorado: $e');
     }
   }
 
