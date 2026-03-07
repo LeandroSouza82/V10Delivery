@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -38,8 +37,8 @@ const String supabaseUrl = 'https://uqxoadxqcwidxqsfayem.supabase.co';
 const String supabaseAnonKey =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxeG9hZHhxY3dpZHhxc2ZheWVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0NDUxODksImV4cCI6MjA4NDAyMTE4OX0.q9_RqSx4YfJxlblPS9fwrocx3HDH91ff1zJvPbVGI8w';
 
-// Modo offline para testes locais. Quando true, carrega dados de exemplo.
-bool modoOffline = true;
+// Modo offline: ativado apenas quando o Supabase falha após retries.
+bool modoOffline = false;
 
 const String _prefBaseLat = 'base_lat';
 const String _prefBaseLng = 'base_lng';
@@ -3094,105 +3093,10 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Carrega dados da tabela 'entregas' no Supabase e atualiza a lista local
   Future<void> carregarDados() async {
-    debugPrint('⚡ carregarDados: iniciando. modoOffline=$modoOffline');
-    // Se estiver em modo offline, usar cache local
-    if (modoOffline) {
-      if (!mounted) return;
-      try {
-        final cached = await CacheService().loadEntregas();
-        if (cached.isNotEmpty) {
-          final lista = cached.map<Map<String, String>>((m) {
-            return m.map((k, v) => MapEntry(k, v?.toString() ?? ''));
-          }).toList();
-          // Ordenar por ordem_logistica
-          lista.sort((a, b) {
-            final ordemA = int.tryParse(a['ordem_logistica'] ?? '999') ?? 999;
-            final ordemB = int.tryParse(b['ordem_logistica'] ?? '999') ?? 999;
-            return ordemA.compareTo(ordemB);
-          });
-          _setEntregas(List<dynamic>.from(lista));
-          _atualizarContadores();
-        } else {
-          // sem cache: lista vazia
-          _setEntregas([]);
-          _atualizarContadores();
-        }
-      } catch (e) {
-        _setEntregas([]);
-        _atualizarContadores();
-      }
-      return;
-    }
-
-    // Checar conectividade básica antes de tentar alcançar o Supabase
-    Future<bool> checarConexao() async {
-      try {
-        final conn = await Connectivity().checkConnectivity();
-        return conn != ConnectivityResult.none;
-      } catch (e) {
-        return false;
-      }
-    }
-
-    if (!await checarConexao()) {
-      if (!mounted) return;
-      setState(() => modoOffline = true);
-
-      // Tentar carregar cache local primeiro
-      try {
-        final cached = await CacheService().loadEntregas();
-        if (cached.isNotEmpty) {
-          final lista = cached.map<Map<String, String>>((m) {
-            return m.map((k, v) => MapEntry(k, v?.toString() ?? ''));
-          }).toList();
-          if (!mounted) return;
-          setState(() {
-            // Se não sabemos o motorista, mostrar lista vazia para evitar dados globais
-            if (_motoristaId == '0' || _motoristaId.isEmpty) {
-              entregas = <Map<String, String>>[];
-            } else {
-              // filtrar cache para incluir apenas entregas do motorista (usar _motoristaId string)
-              final listaFiltrada = lista
-                  .where((m) => (m['motorista_id'] ?? '') == _motoristaId)
-                  .toList();
-              // Ordenar por ordem_logistica
-              listaFiltrada.sort((a, b) {
-                final ordemA =
-                    int.tryParse(a['ordem_logistica'] ?? '999') ?? 999;
-                final ordemB =
-                    int.tryParse(b['ordem_logistica'] ?? '999') ?? 999;
-                return ordemA.compareTo(ordemB);
-              });
-              entregas = listaFiltrada;
-            }
-            _atualizarContadores();
-          });
-        } else {
-          if (!mounted) return;
-          _setEntregas([]);
-          _atualizarContadores();
-        }
-      } catch (e) {
-        debugPrint('Erro ao carregar cache: $e');
-        if (!mounted) return;
-        _setEntregas([]);
-        _atualizarContadores();
-      }
-
-      // iniciar tentativas de reconexão periódicas
-      _reconnectTimer?.cancel();
-      _reconnectTimer = Timer.periodic(const Duration(seconds: 30), (t) async {
-        if (!mounted) {
-          t.cancel();
-          return;
-        }
-        if (await checarConexao()) {
-          t.cancel();
-          await carregarDados();
-        }
-      });
-      return;
-    }
+    debugPrint('⚡ carregarDados: iniciando.');
+    // Não verificamos conectividade via Connectivity() — em muitos dispositivos Android
+    // ela retorna `none` mesmo com rede ativa (falso-positivo conhecido do connectivity_plus).
+    // A estratégia é ir direto ao Supabase com retry; se falhar, aí sim usamos cache.
 
     // Modo online: buscar dados reais no Supabase usando retry exponencial
     final r = RetryOptions(
@@ -3256,7 +3160,9 @@ class RotaMotoristaState extends State<RotaMotorista>
             .from('entregas')
             .select('*')
             .eq('motorista_id', driverIdTrimmed)
-            .or('status.eq.pendente,status.eq.em_rota,status.eq.aguardando,status.eq.adicionado')
+            .or(
+              'status.eq.pendente,status.eq.em_rota,status.eq.aguardando,status.eq.adicionado',
+            )
             .order('ordem_logistica', ascending: true);
       }, retryIf: (e) => e is SocketException || e is TimeoutException);
 
@@ -3401,6 +3307,12 @@ class RotaMotoristaState extends State<RotaMotorista>
       setState(() => modoOffline = true);
       _setEntregas([]);
       _atualizarContadores();
+      _reconnectTimer?.cancel();
+      _reconnectTimer = Timer.periodic(const Duration(seconds: 30), (t) async {
+        if (!mounted) { t.cancel(); return; }
+        try { await carregarDados(); } catch (_) {}
+        if (!modoOffline) t.cancel();
+      });
     }
   }
 
