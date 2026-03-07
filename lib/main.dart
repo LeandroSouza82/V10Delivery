@@ -17,8 +17,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:firebase_core/firebase_core.dart';
 import 'location_service.dart';
 
 import 'services/cache_service.dart';
@@ -68,17 +68,6 @@ class ItemHistorico {
 final List<ItemHistorico> historicoEntregas = [];
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Inicializar Firebase para habilitar FCM (notificações push).
-  // Encapsulado em try-catch: sem google-services.json o app continua funcionando
-  // normalmente e o token FCM simplesmente não será obtido.
-  try {
-    await Firebase.initializeApp();
-    debugPrint('Firebase inicializado com sucesso.');
-  } catch (e) {
-    debugPrint(
-      'Firebase.initializeApp() falhou (sem google-services.json?): $e',
-    );
-  }
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -571,6 +560,16 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Geolocation: subscription para rastreamento em tempo real
   StreamSubscription<Position>? _positionSubscription;
+  // Posição atual do motorista para cálculo de distância nos cards
+  Position? _currentPosition;
+  // Cache de coordenadas geocodificadas: entregaId -> (lat, lng)
+  final Map<String, (double, double)?> _geocodeCache = {};
+  // Cache de distância por vias (OSRM): entregaId -> texto formatado (ex: "2,3 km")
+  final Map<String, String?> _roadDistanceCache = {};
+  // Cache do endereço usado na geocodificação: detecta mudança de endereço no banco
+  final Map<String, String> _enderecoCache = {};
+  // Última posição usada para calcular distâncias OSRM (evita recalcular sem necessidade)
+  Position? _lastOsrmPosition;
   // Timer para checar storage do foreground task e repassar dados para UI
   Timer? _fgStorageTimer;
 
@@ -599,6 +598,19 @@ class RotaMotoristaState extends State<RotaMotorista>
           ),
         );
         return;
+      }
+
+      // Captura imediata da posição para não depender só do stream (que pode demorar)
+      try {
+        final posInicial = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+          ),
+        );
+        if (mounted) setState(() => _currentPosition = posInicial);
+        debugPrint('📍 Posição inicial capturada: $posInicial');
+      } catch (e) {
+        debugPrint('📍 Erro ao capturar posição inicial: $e');
       }
 
       // Antes de iniciar o stream, garantir que o motorista esteja aprovado
@@ -647,6 +659,21 @@ class RotaMotoristaState extends State<RotaMotorista>
       _positionSubscription =
           Geolocator.getPositionStream(locationSettings: settings).listen(
             (Position pos) async {
+              // Atualizar posição atual para distância nos cards
+              if (mounted) setState(() => _currentPosition = pos);
+              // Recalcular distâncias OSRM apenas se o motorista se deslocou mais de 500 m.
+              // Threshold alto evita que variações de sinal GPS causem flickering contínuo.
+              final anterior = _lastOsrmPosition;
+              if (anterior == null ||
+                  Geolocator.distanceBetween(
+                        anterior.latitude,
+                        anterior.longitude,
+                        pos.latitude,
+                        pos.longitude,
+                      ) >
+                      500) {
+                _recalcularTodasOsrm();
+              }
               try {
                 final motoristaId = _motoristaId;
                 // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
@@ -1245,22 +1272,6 @@ class RotaMotoristaState extends State<RotaMotorista>
           } catch (e) {
             debugPrint('Erro iniciando LocationService: $e');
           }
-          // Garantir registro do token FCM armazenado nas prefs (sem Firebase)
-          try {
-            final storedToken = prefs.getString('fcm_token');
-            if (storedToken != null && storedToken.isNotEmpty) {
-              try {
-                await Supabase.instance.client
-                    .from('motoristas')
-                    .update({'fcm_token': storedToken})
-                    .eq('id', _motoristaId);
-              } catch (e) {
-                debugPrint('Erro atualizando fcm_token no banco: $e');
-              }
-            }
-          } catch (e) {
-            debugPrint('Erro ao sincronizar token salvo no auto-login: $e');
-          }
         }
       } catch (e) {
         debugPrint('Erro ao buscar identidade real: $e');
@@ -1271,11 +1282,6 @@ class RotaMotoristaState extends State<RotaMotorista>
       try {
         _tryStartLocationServiceFor(_motoristaId);
       } catch (_) {}
-      try {
-        await _atualizarTokenNoBanco();
-      } catch (e) {
-        debugPrint('ERRO atualizarTokenNoBanco: $e');
-      }
       // Se estava online antes, iniciar service e polling
       if (_isOnline) {
         try {
@@ -1707,37 +1713,6 @@ class RotaMotoristaState extends State<RotaMotorista>
       // serem registrados em pubspec.yaml. Evite alterar esse caminho.
       await _audioPlayer.play(AssetSource('audios/final.mp3'));
     } catch (_) {}
-  }
-
-  // Atualiza token FCM do dispositivo no registro do motorista no Supabase
-  Future<void> _atualizarTokenNoBanco() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final String? token = prefs.getString('fcm_token');
-      if (token != null && token.isNotEmpty) {
-        String idToUse = '';
-        if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
-          idToUse = _motoristaId;
-        } else {
-          idToUse =
-              prefs.getString('driver_id') ??
-              prefs.getInt('driver_id')?.toString() ??
-              '';
-        }
-        if (idToUse.isEmpty || idToUse == '0') return;
-        try {
-          await Supabase.instance.client
-              .from('motoristas')
-              .update({'fcm_token': token})
-              .eq('id', idToUse);
-          debugPrint('Token FCM (prefs) sincronizado com o banco');
-        } catch (e) {
-          debugPrint('ERRO ao sincronizar token FCM: $e');
-        }
-      }
-    } catch (e) {
-      debugPrint('ERRO ao sincronizar token FCM: $e');
-    }
   }
 
   // Atualiza o campo `esta_online` e `status` do motorista no Supabase
@@ -2575,7 +2550,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                               await _postFalhaCleanup(idItem.toString());
                             }
                           : null,
-                      child: Text('ENVIAR PARA GESTOR'),
+                      child: Text(
+                        'ENVIAR PARA GESTOR',
+                        style: TextStyle(color: Colors.white),
+                      ),
                     ),
                   ],
                 ),
@@ -3004,7 +2982,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   }
                                 }
                               : null,
-                          child: Text('ENVIAR PARA GESTOR'),
+                          child: Text(
+                            'ENVIAR PARA GESTOR',
+                            style: TextStyle(color: Colors.white),
+                          ),
                         ),
                       ),
                     ],
@@ -3187,6 +3168,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                 '',
             // incluir ordem_logistica para ordenação correta
             'ordem_logistica': m['ordem_logistica']?.toString() ?? '999',
+            // coordenadas para cálculo de distância em tempo real
+            'latitude': m['latitude']?.toString() ?? '',
+            'longitude': m['longitude']?.toString() ?? '',
           };
         }).toList();
 
@@ -3254,6 +3238,26 @@ class RotaMotoristaState extends State<RotaMotorista>
         // A lista já vem ordenada por id desc; atualizar estado substituindo a lista
         _setEntregas(List<dynamic>.from(lista));
         _atualizarContadores();
+        // Forçar captura de posição se o stream ainda não entregou nenhuma
+        if (_currentPosition == null) {
+          try {
+            final pos = await Geolocator.getCurrentPosition(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.high,
+              ),
+            );
+            if (mounted) setState(() => _currentPosition = pos);
+            debugPrint('📍 Posição forçada em carregarDados: $pos');
+          } catch (e) {
+            debugPrint('📍 Erro ao forçar posição em carregarDados: $e');
+          }
+        }
+        // Geocodificar endereços em background.
+        // NÃO limpar os caches aqui: preservar as distâncias já calculadas para
+        // evitar flickering dos badges durante o polling. O cache só é invalidado
+        // para IDs novos ou com endereço alterado (lógica em _geocodificarEntregas).
+        // A ordem da lista segue estritamente o banco de dados (sem reordenação).
+        _geocodificarEntregas(lista);
         debugPrint('✅ Dados carregados: ${lista.length} registros');
         // Log produtivo de sucesso do polling
         debugPrint(
@@ -4273,10 +4277,18 @@ class RotaMotoristaState extends State<RotaMotorista>
                         }
                         return RefreshIndicator(
                           color: Colors.blue,
-                          onRefresh: carregarDados,
+                          strokeWidth: 3,
+                          onRefresh: () async {
+                            // Pull-to-refresh: limpar caches para forçar recálculo
+                            // completo de coordenadas e distâncias
+                            _geocodeCache.clear();
+                            _roadDistanceCache.clear();
+                            _enderecoCache.clear();
+                            await carregarDados();
+                          },
                           child: ReorderableListView.builder(
                             scrollController: _entregasScrollController,
-                            physics: AlwaysScrollableScrollPhysics(),
+                            physics: const AlwaysScrollableScrollPhysics(),
                             buildDefaultDragHandles: false,
                             proxyDecorator: (child, index, animation) =>
                                 Material(
@@ -4314,6 +4326,221 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
+  /// Higieniza um endereço bruto para envio ao Nominatim/OSRM.
+  ///
+  /// Regras aplicadas (o endereço ORIGINAL no card do motorista não é alterado):
+  ///   1. Remove complementos internos (sala, apto, bloco, loja…) preservando
+  ///      o que vem antes (rua/número) e depois (bairro/cidade).
+  ///   2. Corrige bairros compostos com prefixo geográfico que confundem o
+  ///      Nominatim (ex: "Nova Palhoça" → cidade real é "Palhoça").
+  ///   3. Ancora sempre ao estado para cobrir toda a Grande Florianópolis.
+  ///
+  /// Exemplos:
+  ///   "Rua Paulo Roberto Alves 161, Nova Palhoça"
+  ///   → "Rua Paulo Roberto Alves 161, Nova Palhoça, Santa Catarina, Brasil"
+  ///
+  ///   "Av. Pres. Kennedy 1333 sala 308, Campinas, São José"
+  ///   → "Av. Pres. Kennedy 1333, Campinas, São José, Santa Catarina, Brasil"
+  ///
+  ///   "Rua das Flores 50 - Apto 201 - Florianópolis"
+  ///   → "Rua das Flores 50, Florianópolis, Santa Catarina, Brasil"
+  String _limparEndereco(String raw) {
+    var s = raw;
+
+    // ── Passo 1: remover complemento preservando bairro/cidade após ele ──────
+    // Substitui "sep? + palavra-chave + valor-até-próxima-vírgula" por nada
+    // (se o separador era vírgula, restitui só a vírgula para não colar tokens).
+    s = s.replaceAllMapped(
+      RegExp(
+        r'(\s*[,\-\/]?\s*)'
+        r'(sala|ap\.?|apto\.?|apartamento|bloco|bl\.?|fundos|loja|'
+        r'andar|pavto?\.?|pavimento|conj\.?|conjunto|unidade|un\.?|cj\.?|nr\.?)'
+        r'[^\,]*',
+        caseSensitive: false,
+      ),
+      (m) {
+        final sep = m.group(1) ?? '';
+        return sep.contains(',') ? ',' : '';
+      },
+    );
+
+    // ── Passo 2: remover traço/barra soltos antes de vírgula ou fim ──────────
+    s = s.replaceAll(RegExp(r'\s*[\-\/]\s*(?=,|$)'), '');
+
+    // ── Passo 3: normalizar pontuação ────────────────────────────────────────
+    s = s.replaceAll(RegExp(r',\s*,'), ','); // vírgulas duplas
+    s = s.replaceAll(RegExp(r'\s{2,}'), ' '); // espaços duplos
+    s = s.replaceAll(RegExp(r'[,\-]\s*$'), '').trim(); // lixo no final
+
+    // ── Passo 4: ancoragem regional (Santa Catarina garante Grande Floripa) ──
+    return '$s, Santa Catarina, Brasil';
+  }
+
+  /// Geocodifica endereços via Nominatim e, logo após obter as coordenadas,
+  /// consulta o OSRM para a distância real por vias.
+  Future<void> _geocodificarEntregas(List<Map<String, String>> lista) async {
+    for (final item in lista) {
+      final id = item['id'] ?? '';
+      final enderecoAtual = item['endereco'] ?? '';
+
+      // Invalidar cache somente se o endereço mudou no banco (evita flickering no polling)
+      if (_geocodeCache.containsKey(id) &&
+          _enderecoCache[id] != enderecoAtual) {
+        _geocodeCache.remove(id);
+        _roadDistanceCache.remove(id);
+        _enderecoCache.remove(id);
+      }
+
+      if (_geocodeCache.containsKey(id)) {
+        // Coordenadas já conhecidas e endereço não mudou: garantir OSRM calculado
+        if (!_roadDistanceCache.containsKey(id)) {
+          final coords = _geocodeCache[id];
+          if (coords != null) {
+            final texto = await _consultarOsrm(id, coords.$1, coords.$2);
+            _roadDistanceCache[id] = texto;
+            if (mounted) setState(() {});
+          }
+        }
+        continue;
+      }
+
+      // Usar lat/lng do banco se disponíveis
+      final lat = double.tryParse(item['latitude'] ?? '');
+      final lng = double.tryParse(item['longitude'] ?? '');
+      if (lat != null && lng != null) {
+        _geocodeCache[id] = (lat, lng);
+        _enderecoCache[id] = enderecoAtual;
+        final texto = await _consultarOsrm(id, lat, lng);
+        _roadDistanceCache[id] = texto;
+        if (mounted) setState(() {});
+        continue;
+      }
+
+      final endereco = item['endereco'] ?? '';
+      if (endereco.isEmpty) {
+        debugPrint('📍 GEO-CHECK: id=$id endereço vazio, pulando.');
+        _geocodeCache[id] = null;
+        _roadDistanceCache[id] = null;
+        _enderecoCache[id] = endereco;
+        continue;
+      }
+
+      try {
+        // Limpar e ancorar geograficamente — o `endereco` original NÃO é tocado.
+        final enderecoParaApi = _limparEndereco(endereco);
+        debugPrint('📍 Nominatim: "$endereco" → "$enderecoParaApi"');
+        final query = Uri.encodeComponent(enderecoParaApi);
+        final url = Uri.parse(
+          'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1',
+        );
+        final response = await http.get(
+          url,
+          headers: {'User-Agent': 'V10Delivery/1.0'},
+        );
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body) as List<dynamic>;
+          if (data.isNotEmpty) {
+            final coordLat = double.tryParse(
+              data.first['lat']?.toString() ?? '',
+            );
+            final coordLng = double.tryParse(
+              data.first['lon']?.toString() ?? '',
+            );
+            if (coordLat != null && coordLng != null) {
+              _geocodeCache[id] = (coordLat, coordLng);
+              _enderecoCache[id] = endereco;
+              debugPrint('📍 Nominatim: id=$id -> ($coordLat, $coordLng)');
+              // Calcular distância por vias logo após obter coordenadas
+              final texto = await _consultarOsrm(id, coordLat, coordLng);
+              _roadDistanceCache[id] = texto;
+            } else {
+              _geocodeCache[id] = null;
+              _roadDistanceCache[id] = null;
+              _enderecoCache[id] = endereco;
+            }
+          } else {
+            debugPrint('📍 Nominatim: [$endereco] sem resultado.');
+            _geocodeCache[id] = null;
+            _roadDistanceCache[id] = null;
+            _enderecoCache[id] = endereco;
+          }
+        } else {
+          debugPrint('📍 Nominatim: [$endereco] HTTP ${response.statusCode}');
+          _geocodeCache[id] = null;
+          _roadDistanceCache[id] = null;
+          _enderecoCache[id] = endereco;
+        }
+      } catch (e) {
+        debugPrint('📍 Nominatim: [$endereco] ERRO: $e');
+        _geocodeCache[id] = null;
+        _roadDistanceCache[id] = null;
+        _enderecoCache[id] = endereco;
+      }
+      if (mounted) setState(() {});
+      // Respeitar rate-limit do Nominatim (máx 1 req/s)
+      await Future.delayed(const Duration(milliseconds: 1100));
+    }
+  }
+
+  /// Consulta o OSRM para obter a distância real por vias entre o motorista e o destino.
+  /// Retorna o texto formatado (ex: "3,2 km") ou null em caso de falha.
+  Future<String?> _consultarOsrm(
+    String id,
+    double destLat,
+    double destLng,
+  ) async {
+    final pos = _currentPosition;
+    if (pos == null) return null;
+    try {
+      // OSRM espera lon,lat (longitude primeiro)
+      final url = Uri.parse(
+        'http://router.project-osrm.org/route/v1/driving/'
+        '${pos.longitude},${pos.latitude};$destLng,$destLat?overview=false',
+      );
+      final response = await http
+          .get(url, headers: {'User-Agent': 'V10Delivery/1.0'})
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final routes = data['routes'] as List<dynamic>?;
+        if (routes != null && routes.isNotEmpty) {
+          final metros = (routes.first['distance'] as num?)?.toDouble();
+          if (metros != null) {
+            final texto = metros < 1000
+                ? '${metros.round()} m'
+                : '${(metros / 1000).toStringAsFixed(1)} km';
+            debugPrint('🛣️ OSRM: id=$id -> $texto');
+            return texto;
+          }
+        }
+        debugPrint('🛣️ OSRM: id=$id sem rota na resposta.');
+      } else {
+        debugPrint('🛣️ OSRM: id=$id HTTP ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('🛣️ OSRM: id=$id ERRO: $e');
+    }
+    return null;
+  }
+
+  /// Recalcula as distâncias OSRM para todas as entregas com coordenadas conhecidas.
+  /// Chamado quando o motorista se desloca mais de 100 m.
+  Future<void> _recalcularTodasOsrm() async {
+    final pos = _currentPosition;
+    if (pos == null) return;
+    _lastOsrmPosition = pos;
+    // Percorrer todas as entradas com coordenadas válidas
+    for (final entry in _geocodeCache.entries) {
+      final coords = entry.value;
+      if (coords == null) continue;
+      final texto = await _consultarOsrm(entry.key, coords.$1, coords.$2);
+      _roadDistanceCache[entry.key] = texto;
+      if (mounted) setState(() {});
+      // Pequena pausa para não saturar o servidor OSRM público
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+  }
+
   Widget _buildCard(Map<String, String> item, int index) {
     // Normalizar 'tipo' antes da comparação
     final tipoTratado = (item['tipo'] ?? '').toString().trim().toLowerCase();
@@ -4336,349 +4563,417 @@ class RotaMotoristaState extends State<RotaMotorista>
     final Color textPrimary = Colors.black;
     final Color textSecondary = Colors.black87;
 
-    return Container(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: fillColor,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black26,
-            offset: Offset(0, 8),
-            blurRadius: 16,
-          ),
-        ],
-        border: Border.all(color: corBarra, width: 2.0),
-      ),
-      // Ajuste do padding do card
-      padding: EdgeInsets.all(20),
-      child: Row(
-        children: [
-          // Indicador lateral arredondado
-          Container(
-            width: 10,
-            height: 80,
-            decoration: BoxDecoration(
-              color: corBarra,
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(12),
-                bottomLeft: Radius.circular(12),
+    // Exibir distância real por vias (OSRM) no badge do card
+    final String id = (item['id'] ?? '').toString();
+    final String? roadDist = _roadDistanceCache[id];
+    String distanciaTexto;
+    Color badgeColor;
+    if (_currentPosition == null) {
+      distanciaTexto = '📍 Sem GPS';
+      badgeColor = Colors.orange.shade700;
+    } else if (roadDist != null) {
+      // Distância por vias disponível
+      distanciaTexto = roadDist;
+      badgeColor = Colors.green.shade600;
+    } else if (!_roadDistanceCache.containsKey(id)) {
+      // OSRM ainda não calculou
+      distanciaTexto = '📍 Buscando...';
+      badgeColor = Colors.blueGrey;
+    } else {
+      // OSRM falhou — exibir não disponível
+      distanciaTexto = '📍 N/D';
+      badgeColor = Colors.grey.shade500;
+    }
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          margin: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: fillColor,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black26,
+                offset: Offset(0, 8),
+                blurRadius: 16,
               ),
-            ),
+            ],
+            border: Border.all(color: corBarra, width: 2.0),
           ),
-          SizedBox(width: 12),
-          Expanded(
-            child: GestureDetector(
-              onTapDown: (_) => setState(() => _pressedIndices.add(index)),
-              onTapUp: (_) => setState(() => _pressedIndices.remove(index)),
-              onTapCancel: () => setState(() => _pressedIndices.remove(index)),
-              child: AnimatedContainer(
-                duration: Duration(milliseconds: 200),
-                transform: Matrix4.diagonal3Values(scale, scale, 1.0),
-                transformAlignment: Alignment.center,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Cabeçalho compacto: número visual (posição na fila) e tipo na mesma linha
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: corBarra,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: Text(
-                              // Fila viva: usa posição real na lista (ignora ordem_logistica do banco)
-                              '${index + 1}',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: 10),
-                        Expanded(
-                          child: Stack(
-                            alignment: Alignment.centerLeft,
-                            children: [
-                              // Stroke
-                              Text(
-                                item['tipo']!.toUpperCase(),
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  foreground: Paint()
-                                    ..style = PaintingStyle.stroke
-                                    ..strokeWidth = 1.6
-                                    ..color = corBarra,
-                                ),
-                              ),
-                              // Fill
-                              Text(
-                                item['tipo']!.toUpperCase(),
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: textPrimary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    SizedBox(height: 6),
-
-                    // CLIENTE e ENDEREÇO com hierarquia visual
-                    Text(
-                      'CLIENTE',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                    ),
-                    SizedBox(height: 6),
-                    // Cliente (estilo fixo: preto, maior e em negrito)
-                    Text(
-                      item['cliente'] ?? '',
-                      style: TextStyle(
-                        color: Colors.black87,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      'ENDEREÇO',
-                      style: TextStyle(fontSize: 12, color: textSecondary),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      item['endereco'] ?? '',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: textPrimary,
-                      ),
-                    ),
-
-                    // Aviso do gestor: exibido em destaque laranja apenas quando há conteúdo
-                    Builder(
-                      builder: (ctx) {
-                        final obs =
-                            item['observacoes'] ??
-                            item['observacao'] ??
-                            item['obs'] ??
-                            '';
-                        final obsTexto = obs.toString().trim();
-
-                        if (obsTexto.isEmpty) return const SizedBox.shrink();
-
-                        return Container(
-                          width: double.infinity,
-                          margin: const EdgeInsets.only(top: 8.0, bottom: 8.0),
-                          padding: const EdgeInsets.all(12.0),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.shade50,
-                            border: Border.all(
-                              color: Colors.orange.shade700,
-                              width: 1.5,
-                            ),
-                            borderRadius: BorderRadius.circular(8.0),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(
-                                Icons.warning_amber_rounded,
-                                color: Colors.orange.shade800,
-                                size: 22,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'AVISO DO GESTOR:',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w900,
-                                        color: Colors.orange.shade900,
-                                        letterSpacing: 0.5,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      obsTexto,
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black87,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-
-                    SizedBox(height: 12),
-
-                    // Ações do card: ROTA | FALHA | OK (estilo pill, cada botão expandido)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: 42,
-                            child: ElevatedButton.icon(
-                              icon: Icon(
-                                Icons.map,
-                                color: Colors.white,
-                                size: 16,
-                              ),
-                              label: Text(
-                                'ROTA',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(28),
-                                ),
-                                padding: EdgeInsets.symmetric(horizontal: 8),
-                              ),
-                              onPressed: () {
-                                try {
-                                  final endereco = item['endereco'] ?? '';
-                                  _abrirMapaComPreferencia(endereco);
-                                } catch (e) {
-                                  debugPrint('Erro ao abrir mapa: $e');
-                                }
-                              },
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: 6),
-                        Flexible(
-                          fit: FlexFit.loose,
-                          child: SizedBox(
-                            height: 42,
-                            child: ElevatedButton.icon(
-                              icon: Icon(
-                                Icons.error_outline,
-                                color: Colors.white,
-                                size: 16,
-                              ),
-                              label: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  'FALHA',
-                                  maxLines: 1,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.redAccent,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(28),
-                                ),
-                                padding: EdgeInsets.symmetric(
-                                  vertical: 8,
-                                  horizontal: 4,
-                                ),
-                              ),
-                              onPressed: () {
-                                try {
-                                  setState(() {
-                                    imagemFalha = null;
-                                    fotoEvidencia = null;
-                                  });
-                                  _buildFailModal(
-                                    context,
-                                    Map<String, dynamic>.from(item),
-                                  );
-                                } catch (e) {
-                                  debugPrint(
-                                    'Erro ao abrir modal de falha: $e',
-                                  );
-                                }
-                              },
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: 6),
-                        Expanded(
-                          child: SizedBox(
-                            height: 42,
-                            child: ElevatedButton.icon(
-                              icon: Icon(
-                                Icons.check,
-                                color: Colors.white,
-                                size: 16,
-                              ),
-                              label: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  tipoTratado == 'outros'
-                                      ? 'ATA REGISTRADA / OK'
-                                      : 'OK',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(28),
-                                ),
-                                padding: EdgeInsets.symmetric(horizontal: 8),
-                              ),
-                              onPressed: () {
-                                try {
-                                  setState(() {
-                                    imagemFalha = null;
-                                    fotoEvidencia = null;
-                                  });
-                                  _buildSuccessModal(
-                                    context,
-                                    Map<String, dynamic>.from(item),
-                                  );
-                                } catch (e) {
-                                  debugPrint(
-                                    'Erro ao abrir modal de sucesso: $e',
-                                  );
-                                }
-                              },
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+          // Ajuste do padding do card
+          padding: EdgeInsets.all(20),
+          child: Row(
+            children: [
+              // Indicador lateral arredondado
+              Container(
+                width: 10,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: corBarra,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(12),
+                    bottomLeft: Radius.circular(12),
+                  ),
                 ),
               ),
+              SizedBox(width: 12),
+              Expanded(
+                child: GestureDetector(
+                  onTapDown: (_) => setState(() => _pressedIndices.add(index)),
+                  onTapUp: (_) => setState(() => _pressedIndices.remove(index)),
+                  onTapCancel: () =>
+                      setState(() => _pressedIndices.remove(index)),
+                  child: AnimatedContainer(
+                    duration: Duration(milliseconds: 200),
+                    transform: Matrix4.diagonal3Values(scale, scale, 1.0),
+                    transformAlignment: Alignment.center,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Cabeçalho compacto: número visual (posição na fila) e tipo na mesma linha
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                color: corBarra,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  // Fila viva: usa posição real na lista (ignora ordem_logistica do banco)
+                                  '${index + 1}',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: Stack(
+                                alignment: Alignment.centerLeft,
+                                children: [
+                                  // Stroke
+                                  Text(
+                                    item['tipo']!.toUpperCase(),
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                      foreground: Paint()
+                                        ..style = PaintingStyle.stroke
+                                        ..strokeWidth = 1.6
+                                        ..color = corBarra,
+                                    ),
+                                  ),
+                                  // Fill
+                                  Text(
+                                    item['tipo']!.toUpperCase(),
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                      color: textPrimary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        SizedBox(height: 6),
+
+                        // CLIENTE e ENDEREÇO com hierarquia visual
+                        Text(
+                          'CLIENTE',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                        SizedBox(height: 6),
+                        // Cliente (estilo fixo: preto, maior e em negrito)
+                        Text(
+                          item['cliente'] ?? '',
+                          style: TextStyle(
+                            color: Colors.black87,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 6),
+                        Text(
+                          'ENDEREÇO',
+                          style: TextStyle(fontSize: 12, color: textSecondary),
+                        ),
+                        SizedBox(height: 6),
+                        Text(
+                          item['endereco'] ?? '',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            color: textPrimary,
+                          ),
+                        ),
+
+                        // Aviso do gestor: exibido em destaque laranja apenas quando há conteúdo
+                        Builder(
+                          builder: (ctx) {
+                            final obs =
+                                item['observacoes'] ??
+                                item['observacao'] ??
+                                item['obs'] ??
+                                '';
+                            final obsTexto = obs.toString().trim();
+
+                            if (obsTexto.isEmpty) {
+                              return const SizedBox.shrink();
+                            }
+
+                            return Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(
+                                top: 8.0,
+                                bottom: 8.0,
+                              ),
+                              padding: const EdgeInsets.all(12.0),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.shade50,
+                                border: Border.all(
+                                  color: Colors.orange.shade700,
+                                  width: 1.5,
+                                ),
+                                borderRadius: BorderRadius.circular(8.0),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    Icons.warning_amber_rounded,
+                                    color: Colors.orange.shade800,
+                                    size: 22,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'AVISO DO GESTOR:',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w900,
+                                            color: Colors.orange.shade900,
+                                            letterSpacing: 0.5,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          obsTexto,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+
+                        SizedBox(height: 12),
+
+                        // Ações do card: ROTA | FALHA | OK (estilo pill, cada botão expandido)
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: SizedBox(
+                                height: 42,
+                                child: ElevatedButton.icon(
+                                  icon: Icon(
+                                    Icons.map,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                  label: Text(
+                                    'ROTA',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.blue,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(28),
+                                    ),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                  ),
+                                  onPressed: () {
+                                    try {
+                                      final endereco = item['endereco'] ?? '';
+                                      _abrirMapaComPreferencia(endereco);
+                                    } catch (e) {
+                                      debugPrint('Erro ao abrir mapa: $e');
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: 6),
+                            Flexible(
+                              fit: FlexFit.loose,
+                              child: SizedBox(
+                                height: 42,
+                                child: ElevatedButton.icon(
+                                  icon: Icon(
+                                    Icons.error_outline,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                  label: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      'FALHA',
+                                      maxLines: 1,
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.redAccent,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(28),
+                                    ),
+                                    padding: EdgeInsets.symmetric(
+                                      vertical: 8,
+                                      horizontal: 4,
+                                    ),
+                                  ),
+                                  onPressed: () {
+                                    try {
+                                      setState(() {
+                                        imagemFalha = null;
+                                        fotoEvidencia = null;
+                                      });
+                                      _buildFailModal(
+                                        context,
+                                        Map<String, dynamic>.from(item),
+                                      );
+                                    } catch (e) {
+                                      debugPrint(
+                                        'Erro ao abrir modal de falha: $e',
+                                      );
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: 6),
+                            Expanded(
+                              child: SizedBox(
+                                height: 42,
+                                child: ElevatedButton.icon(
+                                  icon: Icon(
+                                    Icons.check,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                  label: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      tipoTratado == 'outros'
+                                          ? 'ATA REGISTRADA / OK'
+                                          : 'OK',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(28),
+                                    ),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                  ),
+                                  onPressed: () {
+                                    try {
+                                      setState(() {
+                                        imagemFalha = null;
+                                        fotoEvidencia = null;
+                                      });
+                                      _buildSuccessModal(
+                                        context,
+                                        Map<String, dynamic>.from(item),
+                                      );
+                                    } catch (e) {
+                                      debugPrint(
+                                        'Erro ao abrir modal de sucesso: $e',
+                                      );
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Badge de distância / status GPS (canto superior direito)
+        Positioned(
+          top: 18,
+          right: 18,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: badgeColor,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.near_me, color: Colors.white, size: 11),
+                const SizedBox(width: 3),
+                Text(
+                  distanciaTexto,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
