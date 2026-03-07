@@ -1272,7 +1272,6 @@ class RotaMotoristaState extends State<RotaMotorista>
           } catch (e) {
             debugPrint('Erro iniciando LocationService: $e');
           }
-
         }
       } catch (e) {
         debugPrint('Erro ao buscar identidade real: $e');
@@ -2551,7 +2550,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                               await _postFalhaCleanup(idItem.toString());
                             }
                           : null,
-                      child: Text('ENVIAR PARA GESTOR'),
+                      child: Text(
+                        'ENVIAR PARA GESTOR',
+                        style: TextStyle(color: Colors.white),
+                      ),
                     ),
                   ],
                 ),
@@ -2980,7 +2982,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   }
                                 }
                               : null,
-                          child: Text('ENVIAR PARA GESTOR'),
+                          child: Text(
+                            'ENVIAR PARA GESTOR',
+                            style: TextStyle(color: Colors.white),
+                          ),
                         ),
                       ),
                     ],
