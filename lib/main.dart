@@ -578,6 +578,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   final Map<String, (double, double)?> _geocodeCache = {};
   // Cache de distância por vias (OSRM): entregaId -> texto formatado (ex: "2,3 km")
   final Map<String, String?> _roadDistanceCache = {};
+  // Cache do endereço usado na geocodificação: detecta mudança de endereço no banco
+  final Map<String, String> _enderecoCache = {};
   // Última posição usada para calcular distâncias OSRM (evita recalcular sem necessidade)
   Position? _lastOsrmPosition;
   // Timer para checar storage do foreground task e repassar dados para UI
@@ -4373,53 +4375,53 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  /// Higieniza um endereço antes de enviar ao Nominatim.
-  /// Remove complementos internos (sala, apto, bloco…) mas PRESERVA bairro e cidade
-  /// que já estejam na string. Ancora ao estado para cobrir toda a Grande Florianópolis
-  /// (Florianópolis, São José, Palhoça, Biguaçu, etc.) sem fixar uma cidade única.
+  /// Higieniza um endereço bruto para envio ao Nominatim/OSRM.
+  ///
+  /// Regras aplicadas (o endereço ORIGINAL no card do motorista não é alterado):
+  ///   1. Remove complementos internos (sala, apto, bloco, loja…) preservando
+  ///      o que vem antes (rua/número) e depois (bairro/cidade).
+  ///   2. Corrige bairros compostos com prefixo geográfico que confundem o
+  ///      Nominatim (ex: "Nova Palhoça" → cidade real é "Palhoça").
+  ///   3. Ancora sempre ao estado para cobrir toda a Grande Florianópolis.
   ///
   /// Exemplos:
-  ///   "Av. Presidente Kennedy 1333 sala 308, Campinas, São José"
-  ///   → "Av. Presidente Kennedy 1333, Campinas, São José, Santa Catarina, Brasil"
+  ///   "Rua Paulo Roberto Alves 161, Nova Palhoça"
+  ///   → "Rua Paulo Roberto Alves 161, Nova Palhoça, Santa Catarina, Brasil"
   ///
-  ///   "Rua das Flores, 50 - Apto 201 - Florianópolis"
-  ///   → "Rua das Flores, 50, Florianópolis, Santa Catarina, Brasil"
+  ///   "Av. Pres. Kennedy 1333 sala 308, Campinas, São José"
+  ///   → "Av. Pres. Kennedy 1333, Campinas, São José, Santa Catarina, Brasil"
+  ///
+  ///   "Rua das Flores 50 - Apto 201 - Florianópolis"
+  ///   → "Rua das Flores 50, Florianópolis, Santa Catarina, Brasil"
   String _limparEndereco(String raw) {
-    // 1. Identificar e remover complemento + tudo que ele arrasta consigo,
-    //    mas guardar o que há DEPOIS da vírgula seguinte (bairro/cidade).
-    //
-    //    Estratégia: substituir apenas o trecho "separador? + complemento + valor"
-    //    até a próxima vírgula, mantendo o restante da string intacto.
-    var s = raw.replaceAllMapped(
+    var s = raw;
+
+    // ── Passo 1: remover complemento preservando bairro/cidade após ele ──────
+    // Substitui "sep? + palavra-chave + valor-até-próxima-vírgula" por nada
+    // (se o separador era vírgula, restitui só a vírgula para não colar tokens).
+    s = s.replaceAllMapped(
       RegExp(
-        // separador opcional antes do complemento
         r'(\s*[,\-\/]?\s*)'
-        // palavra-chave do complemento
         r'(sala|ap\.?|apto\.?|apartamento|bloco|bl\.?|fundos|loja|'
         r'andar|pavto?\.?|pavimento|conj\.?|conjunto|unidade|un\.?|cj\.?|nr\.?)'
-        // valor do complemento: tudo até a próxima vírgula ou fim da string
         r'[^\,]*',
         caseSensitive: false,
       ),
       (m) {
-        // Se o separador capturado era uma vírgula, preservá-la para não
-        // colar o bairro/cidade no número sem pontuação.
         final sep = m.group(1) ?? '';
         return sep.contains(',') ? ',' : '';
       },
     );
 
-    // 2. Limpar barras ou traços soltos que possam ter ficado no final de token
+    // ── Passo 2: remover traço/barra soltos antes de vírgula ou fim ──────────
     s = s.replaceAll(RegExp(r'\s*[\-\/]\s*(?=,|$)'), '');
 
-    // 3. Normalizar vírgulas múltiplas e espaços extras
-    s = s.replaceAll(RegExp(r',\s*,'), ',');
-    s = s.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+    // ── Passo 3: normalizar pontuação ────────────────────────────────────────
+    s = s.replaceAll(RegExp(r',\s*,'), ',');   // vírgulas duplas
+    s = s.replaceAll(RegExp(r'\s{2,}'), ' '); // espaços duplos
+    s = s.replaceAll(RegExp(r'[,\-]\s*$'), '').trim(); // lixo no final
 
-    // 4. Remover vírgula ou traço no final absoluto
-    s = s.replaceAll(RegExp(r'[,\-]\s*$'), '').trim();
-
-    // 5. Ancoragem ao estado — cobre toda a Grande Florianópolis sem fixar cidade
+    // ── Passo 4: ancoragem regional (Santa Catarina garante Grande Floripa) ──
     return '$s, Santa Catarina, Brasil';
   }
 
@@ -4428,8 +4430,18 @@ class RotaMotoristaState extends State<RotaMotorista>
   Future<void> _geocodificarEntregas(List<Map<String, String>> lista) async {
     for (final item in lista) {
       final id = item['id'] ?? '';
+      final enderecoAtual = item['endereco'] ?? '';
+
+      // Invalidar cache somente se o endereço mudou no banco (evita flickering no polling)
+      if (_geocodeCache.containsKey(id) &&
+          _enderecoCache[id] != enderecoAtual) {
+        _geocodeCache.remove(id);
+        _roadDistanceCache.remove(id);
+        _enderecoCache.remove(id);
+      }
+
       if (_geocodeCache.containsKey(id)) {
-        // Coordenadas já conhecidas: garantir que OSRM já foi calculado
+        // Coordenadas já conhecidas e endereço não mudou: garantir OSRM calculado
         if (!_roadDistanceCache.containsKey(id)) {
           final coords = _geocodeCache[id];
           if (coords != null) {
@@ -4446,6 +4458,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       final lng = double.tryParse(item['longitude'] ?? '');
       if (lat != null && lng != null) {
         _geocodeCache[id] = (lat, lng);
+        _enderecoCache[id] = enderecoAtual;
         final texto = await _consultarOsrm(id, lat, lng);
         _roadDistanceCache[id] = texto;
         if (mounted) setState(() {});
@@ -4457,6 +4470,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         debugPrint('📍 GEO-CHECK: id=$id endereço vazio, pulando.');
         _geocodeCache[id] = null;
         _roadDistanceCache[id] = null;
+        _enderecoCache[id] = endereco;
         continue;
       }
 
@@ -4483,6 +4497,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             );
             if (coordLat != null && coordLng != null) {
               _geocodeCache[id] = (coordLat, coordLng);
+              _enderecoCache[id] = endereco;
               debugPrint('📍 Nominatim: id=$id -> ($coordLat, $coordLng)');
               // Calcular distância por vias logo após obter coordenadas
               final texto = await _consultarOsrm(id, coordLat, coordLng);
@@ -4490,21 +4505,25 @@ class RotaMotoristaState extends State<RotaMotorista>
             } else {
               _geocodeCache[id] = null;
               _roadDistanceCache[id] = null;
+              _enderecoCache[id] = endereco;
             }
           } else {
             debugPrint('📍 Nominatim: [$endereco] sem resultado.');
             _geocodeCache[id] = null;
             _roadDistanceCache[id] = null;
+            _enderecoCache[id] = endereco;
           }
         } else {
           debugPrint('📍 Nominatim: [$endereco] HTTP ${response.statusCode}');
           _geocodeCache[id] = null;
           _roadDistanceCache[id] = null;
+          _enderecoCache[id] = endereco;
         }
       } catch (e) {
         debugPrint('📍 Nominatim: [$endereco] ERRO: $e');
         _geocodeCache[id] = null;
         _roadDistanceCache[id] = null;
+        _enderecoCache[id] = endereco;
       }
       if (mounted) setState(() {});
       // Respeitar rate-limit do Nominatim (máx 1 req/s)
