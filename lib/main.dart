@@ -19,7 +19,6 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:firebase_core/firebase_core.dart';
 import 'location_service.dart';
 
 import 'services/cache_service.dart';
@@ -69,17 +68,6 @@ class ItemHistorico {
 final List<ItemHistorico> historicoEntregas = [];
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Inicializar Firebase para habilitar FCM (notificações push).
-  // Encapsulado em try-catch: sem google-services.json o app continua funcionando
-  // normalmente e o token FCM simplesmente não será obtido.
-  try {
-    await Firebase.initializeApp();
-    debugPrint('Firebase inicializado com sucesso.');
-  } catch (e) {
-    debugPrint(
-      'Firebase.initializeApp() falhou (sem google-services.json?): $e',
-    );
-  }
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -1284,22 +1272,7 @@ class RotaMotoristaState extends State<RotaMotorista>
           } catch (e) {
             debugPrint('Erro iniciando LocationService: $e');
           }
-          // Garantir registro do token FCM armazenado nas prefs (sem Firebase)
-          try {
-            final storedToken = prefs.getString('fcm_token');
-            if (storedToken != null && storedToken.isNotEmpty) {
-              try {
-                await Supabase.instance.client
-                    .from('motoristas')
-                    .update({'fcm_token': storedToken})
-                    .eq('id', _motoristaId);
-              } catch (e) {
-                debugPrint('Erro atualizando fcm_token no banco: $e');
-              }
-            }
-          } catch (e) {
-            debugPrint('Erro ao sincronizar token salvo no auto-login: $e');
-          }
+
         }
       } catch (e) {
         debugPrint('Erro ao buscar identidade real: $e');
@@ -1310,11 +1283,6 @@ class RotaMotoristaState extends State<RotaMotorista>
       try {
         _tryStartLocationServiceFor(_motoristaId);
       } catch (_) {}
-      try {
-        await _atualizarTokenNoBanco();
-      } catch (e) {
-        debugPrint('ERRO atualizarTokenNoBanco: $e');
-      }
       // Se estava online antes, iniciar service e polling
       if (_isOnline) {
         try {
@@ -1746,37 +1714,6 @@ class RotaMotoristaState extends State<RotaMotorista>
       // serem registrados em pubspec.yaml. Evite alterar esse caminho.
       await _audioPlayer.play(AssetSource('audios/final.mp3'));
     } catch (_) {}
-  }
-
-  // Atualiza token FCM do dispositivo no registro do motorista no Supabase
-  Future<void> _atualizarTokenNoBanco() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final String? token = prefs.getString('fcm_token');
-      if (token != null && token.isNotEmpty) {
-        String idToUse = '';
-        if (_motoristaId != '0' && _motoristaId.isNotEmpty) {
-          idToUse = _motoristaId;
-        } else {
-          idToUse =
-              prefs.getString('driver_id') ??
-              prefs.getInt('driver_id')?.toString() ??
-              '';
-        }
-        if (idToUse.isEmpty || idToUse == '0') return;
-        try {
-          await Supabase.instance.client
-              .from('motoristas')
-              .update({'fcm_token': token})
-              .eq('id', idToUse);
-          debugPrint('Token FCM (prefs) sincronizado com o banco');
-        } catch (e) {
-          debugPrint('ERRO ao sincronizar token FCM: $e');
-        }
-      }
-    } catch (e) {
-      debugPrint('ERRO ao sincronizar token FCM: $e');
-    }
   }
 
   // Atualiza o campo `esta_online` e `status` do motorista no Supabase
