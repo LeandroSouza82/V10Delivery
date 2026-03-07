@@ -3875,7 +3875,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 ListTile(
                   leading: Icon(Icons.palette, color: Colors.red),
                   title: Text(
-                    '🎨 Cores dos Cards',
+                    'Cores dos Cards',
                     style: TextStyle(
                       color: modoDia ? Colors.black : Colors.white,
                     ),
@@ -3888,7 +3888,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 ListTile(
                   leading: Icon(Icons.location_on, color: Colors.deepOrange),
                   title: Text(
-                    '📍 Configurar Endereço da Base',
+                    'Configurar Endereço da Base',
                     style: TextStyle(
                       color: modoDia ? Colors.black : Colors.white,
                     ),
@@ -4192,7 +4192,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   child: const Column(
                                     mainAxisSize: MainAxisSize.min,
                                     mainAxisAlignment: MainAxisAlignment.center,
-                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
                                     children: [
                                       Text(
                                         'RETORNAR PARA A EMPRESA',
@@ -4246,7 +4247,8 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   child: const Column(
                                     mainAxisSize: MainAxisSize.min,
                                     mainAxisAlignment: MainAxisAlignment.center,
-                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
                                     children: [
                                       Text(
                                         'RETORNAR PARA A EMPRESA',
