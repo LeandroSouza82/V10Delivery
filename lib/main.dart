@@ -571,6 +571,8 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Geolocation: subscription para rastreamento em tempo real
   StreamSubscription<Position>? _positionSubscription;
+  // Posição atual do motorista para cálculo de distância nos cards
+  Position? _currentPosition;
   // Timer para checar storage do foreground task e repassar dados para UI
   Timer? _fgStorageTimer;
 
@@ -647,6 +649,8 @@ class RotaMotoristaState extends State<RotaMotorista>
       _positionSubscription =
           Geolocator.getPositionStream(locationSettings: settings).listen(
             (Position pos) async {
+              // Atualizar posição atual para distância nos cards
+              if (mounted) setState(() => _currentPosition = pos);
               try {
                 final motoristaId = _motoristaId;
                 // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
@@ -3187,6 +3191,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                 '',
             // incluir ordem_logistica para ordenação correta
             'ordem_logistica': m['ordem_logistica']?.toString() ?? '999',
+            // coordenadas para cálculo de distância em tempo real
+            'latitude': m['latitude']?.toString() ?? '',
+            'longitude': m['longitude']?.toString() ?? '',
           };
         }).toList();
 
@@ -4336,7 +4343,29 @@ class RotaMotoristaState extends State<RotaMotorista>
     final Color textPrimary = Colors.black;
     final Color textSecondary = Colors.black87;
 
-    return Container(
+    // Calcular distância entre motorista e entrega
+    String? distanciaTexto;
+    if (_currentPosition != null) {
+      final lat = double.tryParse(item['latitude'] ?? '');
+      final lng = double.tryParse(item['longitude'] ?? '');
+      if (lat != null && lng != null) {
+        final metros = Geolocator.distanceBetween(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+          lat,
+          lng,
+        );
+        if (metros < 1000) {
+          distanciaTexto = '${metros.round()}m';
+        } else {
+          distanciaTexto = '${(metros / 1000).toStringAsFixed(1)} km';
+        }
+      }
+    }
+
+    return Stack(
+      children: [
+        Container(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
         color: fillColor,
@@ -4679,7 +4708,37 @@ class RotaMotoristaState extends State<RotaMotorista>
           ),
         ],
       ),
-    );
+    ),
+    // Badge de distância em tempo real (canto superior direito)
+    if (distanciaTexto != null)
+      Positioned(
+        top: 18,
+        right: 18,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade700,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.near_me, color: Colors.white, size: 11),
+              const SizedBox(width: 3),
+              Text(
+                distanciaTexto,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+  ],
+);
   }
 
   Future<void> _abrirMapaComPreferencia(String endereco) async {
