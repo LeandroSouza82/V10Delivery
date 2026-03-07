@@ -576,6 +576,10 @@ class RotaMotoristaState extends State<RotaMotorista>
   Position? _currentPosition;
   // Cache de coordenadas geocodificadas: entregaId -> (lat, lng)
   final Map<String, (double, double)?> _geocodeCache = {};
+  // Cache de distância por vias (OSRM): entregaId -> texto formatado (ex: "2,3 km")
+  final Map<String, String?> _roadDistanceCache = {};
+  // Última posição usada para calcular distâncias OSRM (evita recalcular sem necessidade)
+  Position? _lastOsrmPosition;
   // Timer para checar storage do foreground task e repassar dados para UI
   Timer? _fgStorageTimer;
 
@@ -667,6 +671,18 @@ class RotaMotoristaState extends State<RotaMotorista>
             (Position pos) async {
               // Atualizar posição atual para distância nos cards
               if (mounted) setState(() => _currentPosition = pos);
+              // Recalcular distâncias OSRM se o motorista se deslocou mais de 100 m
+              final anterior = _lastOsrmPosition;
+              if (anterior == null ||
+                  Geolocator.distanceBetween(
+                        anterior.latitude,
+                        anterior.longitude,
+                        pos.latitude,
+                        pos.longitude,
+                      ) >
+                      100) {
+                _recalcularTodasOsrm();
+              }
               try {
                 final motoristaId = _motoristaId;
                 // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
@@ -4354,16 +4370,35 @@ class RotaMotoristaState extends State<RotaMotorista>
   }
 
   /// Geocodifica os endereços das entregas via Nominatim (OpenStreetMap) — sem plugin nativo.
+  /// Geocodifica endereços via Nominatim e, logo após obter as coordenadas,
+  /// consulta o OSRM para a distância real por vias.
   Future<void> _geocodificarEntregas(List<Map<String, String>> lista) async {
     for (final item in lista) {
       final id = item['id'] ?? '';
-      if (_geocodeCache.containsKey(id)) continue;
+      if (_geocodeCache.containsKey(id)) {
+        // Coordenadas já conhecidas: garantir que OSRM já foi calculado
+        if (!_roadDistanceCache.containsKey(id)) {
+          final coords = _geocodeCache[id];
+          if (coords != null) {
+            final texto = await _consultarOsrm(
+              id,
+              coords.$1,
+              coords.$2,
+            );
+            _roadDistanceCache[id] = texto;
+            if (mounted) setState(() {});
+          }
+        }
+        continue;
+      }
 
       // Usar lat/lng do banco se disponíveis
       final lat = double.tryParse(item['latitude'] ?? '');
       final lng = double.tryParse(item['longitude'] ?? '');
       if (lat != null && lng != null) {
         _geocodeCache[id] = (lat, lng);
+        final texto = await _consultarOsrm(id, lat, lng);
+        _roadDistanceCache[id] = texto;
         if (mounted) setState(() {});
         continue;
       }
@@ -4372,6 +4407,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       if (endereco.isEmpty) {
         debugPrint('📍 GEO-CHECK: id=$id endereço vazio, pulando.');
         _geocodeCache[id] = null;
+        _roadDistanceCache[id] = null;
         continue;
       }
 
@@ -4386,9 +4422,6 @@ class RotaMotoristaState extends State<RotaMotorista>
         );
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as List<dynamic>;
-          debugPrint(
-            '📍 GEO-CHECK: [$endereco] -> ${data.isEmpty ? 'sem resultado' : data.first}',
-          );
           if (data.isNotEmpty) {
             final coordLat = double.tryParse(
               data.first['lat']?.toString() ?? '',
@@ -4398,26 +4431,92 @@ class RotaMotoristaState extends State<RotaMotorista>
             );
             if (coordLat != null && coordLng != null) {
               _geocodeCache[id] = (coordLat, coordLng);
-              debugPrint('📍 GEO-CHECK: cache salvo -> ($coordLat, $coordLng)');
+              debugPrint('📍 Nominatim: id=$id -> ($coordLat, $coordLng)');
+              // Calcular distância por vias logo após obter coordenadas
+              final texto = await _consultarOsrm(id, coordLat, coordLng);
+              _roadDistanceCache[id] = texto;
             } else {
               _geocodeCache[id] = null;
+              _roadDistanceCache[id] = null;
             }
           } else {
+            debugPrint('📍 Nominatim: [$endereco] sem resultado.');
             _geocodeCache[id] = null;
+            _roadDistanceCache[id] = null;
           }
         } else {
-          debugPrint(
-            '📍 GEO-CHECK: [$endereco] -> HTTP ${response.statusCode}',
-          );
+          debugPrint('📍 Nominatim: [$endereco] HTTP ${response.statusCode}');
           _geocodeCache[id] = null;
+          _roadDistanceCache[id] = null;
         }
       } catch (e) {
-        debugPrint('📍 GEO-CHECK: [$endereco] -> ERRO: $e');
+        debugPrint('📍 Nominatim: [$endereco] ERRO: $e');
         _geocodeCache[id] = null;
+        _roadDistanceCache[id] = null;
       }
       if (mounted) setState(() {});
       // Respeitar rate-limit do Nominatim (máx 1 req/s)
       await Future.delayed(const Duration(milliseconds: 1100));
+    }
+  }
+
+  /// Consulta o OSRM para obter a distância real por vias entre o motorista e o destino.
+  /// Retorna o texto formatado (ex: "3,2 km") ou null em caso de falha.
+  Future<String?> _consultarOsrm(
+    String id,
+    double destLat,
+    double destLng,
+  ) async {
+    final pos = _currentPosition;
+    if (pos == null) return null;
+    try {
+      // OSRM espera lon,lat (longitude primeiro)
+      final url = Uri.parse(
+        'http://router.project-osrm.org/route/v1/driving/'
+        '${pos.longitude},${pos.latitude};$destLng,$destLat?overview=false',
+      );
+      final response = await http.get(
+        url,
+        headers: {'User-Agent': 'V10Delivery/1.0'},
+      ).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final routes = data['routes'] as List<dynamic>?;
+        if (routes != null && routes.isNotEmpty) {
+          final metros = (routes.first['distance'] as num?)?.toDouble();
+          if (metros != null) {
+            final texto = metros < 1000
+                ? '${metros.round()} m'
+                : '${(metros / 1000).toStringAsFixed(1)} km';
+            debugPrint('🛣️ OSRM: id=$id -> $texto');
+            return texto;
+          }
+        }
+        debugPrint('🛣️ OSRM: id=$id sem rota na resposta.');
+      } else {
+        debugPrint('🛣️ OSRM: id=$id HTTP ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('🛣️ OSRM: id=$id ERRO: $e');
+    }
+    return null;
+  }
+
+  /// Recalcula as distâncias OSRM para todas as entregas com coordenadas conhecidas.
+  /// Chamado quando o motorista se desloca mais de 100 m.
+  Future<void> _recalcularTodasOsrm() async {
+    final pos = _currentPosition;
+    if (pos == null) return;
+    _lastOsrmPosition = pos;
+    // Percorrer todas as entradas com coordenadas válidas
+    for (final entry in _geocodeCache.entries) {
+      final coords = entry.value;
+      if (coords == null) continue;
+      final texto = await _consultarOsrm(entry.key, coords.$1, coords.$2);
+      _roadDistanceCache[entry.key] = texto;
+      if (mounted) setState(() {});
+      // Pequena pausa para não saturar o servidor OSRM público
+      await Future.delayed(const Duration(milliseconds: 300));
     }
   }
 
@@ -4443,35 +4542,26 @@ class RotaMotoristaState extends State<RotaMotorista>
     final Color textPrimary = Colors.black;
     final Color textSecondary = Colors.black87;
 
-    // Calcular distância entre motorista e entrega
+    // Exibir distância real por vias (OSRM) no badge do card
     final String id = (item['id'] ?? '').toString();
-    String? distanciaTexto;
+    final String? roadDist = _roadDistanceCache[id];
+    String distanciaTexto;
     Color badgeColor;
     if (_currentPosition == null) {
       distanciaTexto = '📍 Sem GPS';
       badgeColor = Colors.orange.shade700;
+    } else if (roadDist != null) {
+      // Distância por vias disponível
+      distanciaTexto = roadDist;
+      badgeColor = Colors.green.shade600;
+    } else if (!_roadDistanceCache.containsKey(id)) {
+      // OSRM ainda não calculou
+      distanciaTexto = '📍 Buscando...';
+      badgeColor = Colors.blueGrey;
     } else {
-      final coords = _geocodeCache[id];
-      if (coords != null) {
-        final metros = Geolocator.distanceBetween(
-          _currentPosition!.latitude,
-          _currentPosition!.longitude,
-          coords.$1,
-          coords.$2,
-        );
-        distanciaTexto = metros < 1000
-            ? '${metros.round()}m'
-            : '${(metros / 1000).toStringAsFixed(1)} km';
-        badgeColor = Colors.green.shade600;
-      } else if (!_geocodeCache.containsKey(id)) {
-        // Geocodificação ainda não iniciou ou em andamento
-        distanciaTexto = '📍 Buscando...';
-        badgeColor = Colors.blueGrey;
-      } else {
-        // Geocodificação falhou para este endereço
-        distanciaTexto = '📍 Buscando...';
-        badgeColor = Colors.blueGrey;
-      }
+      // OSRM falhou — exibir não disponível
+      distanciaTexto = '📍 N/D';
+      badgeColor = Colors.grey.shade500;
     }
 
     return Stack(
@@ -4837,31 +4927,31 @@ class RotaMotoristaState extends State<RotaMotorista>
         ),
         // Badge de distância / status GPS (canto superior direito)
         Positioned(
-            top: 18,
-            right: 18,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: badgeColor,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.near_me, color: Colors.white, size: 11),
-                  const SizedBox(width: 3),
-                  Text(
-                    distanciaTexto,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                    ),
+          top: 18,
+          right: 18,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: badgeColor,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.near_me, color: Colors.white, size: 11),
+                const SizedBox(width: 3),
+                Text(
+                  distanciaTexto,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
+        ),
       ],
     );
   }
