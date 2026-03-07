@@ -41,6 +41,11 @@ const String supabaseAnonKey =
 // Modo offline para testes locais. Quando true, carrega dados de exemplo.
 bool modoOffline = true;
 
+const String _prefBaseLat = 'base_lat';
+const String _prefBaseLng = 'base_lng';
+const double _defaultBaseLat = -27.64105;
+const double _defaultBaseLng = -48.66919;
+
 // Modelo simples para histórico de entregas
 class ItemHistorico {
   final String nomeCliente;
@@ -508,43 +513,30 @@ class _SplashPageState extends State<SplashPage> {
   }
 }
 
-Future<void> _enviarWhatsApp(String mensagem, {String? phone}) async {
-  // Construir Uri com `Uri` para garantir codificação correta
-  Uri uri;
-  if (phone != null && phone.isNotEmpty) {
-    uri = Uri.https('api.whatsapp.com', '/send', {
-      'phone': phone,
-      'text': mensagem,
-    });
-  } else {
-    uri = Uri.https('api.whatsapp.com', '/send', {'text': mensagem});
-  }
+Future<void> _enviarWhatsApp(String mensagem) async {
+  // Abre WhatsApp sem número fixo -> usuário escolhe contato/grupo
+  final Uri uriNativo = Uri(
+    scheme: 'whatsapp',
+    host: 'send',
+    queryParameters: {'text': mensagem},
+  );
 
   try {
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (await canLaunchUrl(uriNativo)) {
+      await launchUrl(uriNativo, mode: LaunchMode.externalApplication);
       return;
     }
   } catch (_) {}
 
-  // fallback para esquema nativo do WhatsApp
+  // Fallback: api.whatsapp.com sem número
   try {
-    Uri whatsapp;
-    if (phone != null && phone.isNotEmpty) {
-      whatsapp = Uri(
-        scheme: 'whatsapp',
-        host: 'send',
-        queryParameters: {'phone': phone, 'text': mensagem},
-      );
-    } else {
-      whatsapp = Uri(
-        scheme: 'whatsapp',
-        host: 'send',
-        queryParameters: {'text': mensagem},
-      );
-    }
-    if (await canLaunchUrl(whatsapp)) {
-      await launchUrl(whatsapp, mode: LaunchMode.externalApplication);
+    final Uri uriFallback = Uri.https(
+      'api.whatsapp.com',
+      '/send',
+      {'text': mensagem},
+    );
+    if (await canLaunchUrl(uriFallback)) {
+      await launchUrl(uriFallback, mode: LaunchMode.externalApplication);
     }
   } catch (_) {}
 }
@@ -1126,6 +1118,8 @@ class RotaMotoristaState extends State<RotaMotorista>
   // Contador de mensagens não lidas (usado pelo badge no appBar)
   int mensagensNaoLidas = 0;
   String? _selectedMapName;
+  double _baseLat = _defaultBaseLat;
+  double _baseLng = _defaultBaseLng;
 
   @override
   void initState() {
@@ -1354,11 +1348,19 @@ class RotaMotoristaState extends State<RotaMotorista>
       _audioPlayer.setVolume(1.0);
     } catch (_) {}
 
-    // Carregar preferência de app de mapa salvo
+    // Carregar preferência de app de mapa salvo + coordenadas da base
     SharedPreferences.getInstance().then((prefs) {
       final mapName = prefs.getString(prefSelectedMapKey);
       if (mapName != null && mapName.isNotEmpty) {
         setState(() => _selectedMapName = mapName);
+      }
+      final lat = prefs.getDouble(_prefBaseLat);
+      final lng = prefs.getDouble(_prefBaseLng);
+      if (lat != null && lng != null) {
+        setState(() {
+          _baseLat = lat;
+          _baseLng = lng;
+        });
       }
       // Carregar avatar salvo (se houver)
       final av = prefs.getString('avatar_path');
@@ -1957,12 +1959,12 @@ class RotaMotoristaState extends State<RotaMotorista>
           await finalizarEnvio(f, report);
         } else {
           try {
-            await _enviarWhatsApp(report, phone: numeroGestor);
+            await _enviarWhatsApp(report);
           } catch (_) {}
         }
       } else {
         try {
-          await _enviarWhatsApp(report, phone: numeroGestor);
+          await _enviarWhatsApp(report);
         } catch (_) {}
       }
     } catch (e) {
@@ -2054,12 +2056,11 @@ class RotaMotoristaState extends State<RotaMotorista>
         }
       }
 
-      // Tentar abrir WhatsApp nativo (sem foto ou se share falhar)
+      // Tentar abrir WhatsApp nativo (sem número fixo)
       try {
         final String textEncoded = Uri.encodeComponent(mensagem);
-        final String phone = numeroGestor.replaceAll('+', '');
         final Uri uriWhatsApp = Uri.parse(
-          'whatsapp://send?phone=$phone&text=$textEncoded',
+          'whatsapp://send?text=$textEncoded',
         );
         if (await canLaunchUrl(uriWhatsApp)) {
           await launchUrl(uriWhatsApp, mode: LaunchMode.externalApplication);
@@ -2072,9 +2073,9 @@ class RotaMotoristaState extends State<RotaMotorista>
         debugPrint('Erro ao tentar abrir WhatsApp nativo: $waErr');
       }
 
-      // Fallback para _enviarWhatsApp (usa api.whatsapp.com / https)
+      // Fallback para _enviarWhatsApp
       try {
-        await _enviarWhatsApp(mensagem, phone: numeroGestor);
+        await _enviarWhatsApp(mensagem);
         try {
           _resetModalPhotos();
         } catch (_) {}
@@ -2103,6 +2104,143 @@ class RotaMotoristaState extends State<RotaMotorista>
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(prefSelectedMapKey, mapName);
     setState(() => _selectedMapName = mapName);
+  }
+
+  Future<void> _configurarEnderecoBase() async {
+    final latController = TextEditingController(
+      text: _baseLat.toStringAsFixed(5),
+    );
+    final lngController = TextEditingController(
+      text: _baseLng.toStringAsFixed(5),
+    );
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx2, setDlg) {
+            bool capturando = false;
+
+            Future<void> usarLocalizacaoAtual() async {
+              setDlg(() => capturando = true);
+              try {
+                final pos = await Geolocator.getCurrentPosition(
+                  locationSettings: const LocationSettings(
+                    accuracy: LocationAccuracy.high,
+                    timeLimit: Duration(seconds: 10),
+                  ),
+                );
+                latController.text = pos.latitude.toStringAsFixed(5);
+                lngController.text = pos.longitude.toStringAsFixed(5);
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Erro ao obter localização: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              } finally {
+                setDlg(() => capturando = false);
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('📍 Endereço da Base'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: latController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                      signed: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Latitude',
+                      hintText: '-27.64105',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: lngController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                      signed: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Longitude',
+                      hintText: '-48.66919',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      icon: capturando
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.my_location),
+                      label: const Text('Usar Localização Atual'),
+                      onPressed: capturando ? null : usarLocalizacaoAtual,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancelar'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                  ),
+                  onPressed: () async {
+                    final lat = double.tryParse(latController.text.trim());
+                    final lng = double.tryParse(lngController.text.trim());
+                    if (lat == null || lng == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Latitude ou Longitude inválidas.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setDouble(_prefBaseLat, lat);
+                    await prefs.setDouble(_prefBaseLng, lng);
+                    setState(() {
+                      _baseLat = lat;
+                      _baseLng = lng;
+                    });
+                    if (!mounted) return;
+                    // ignore: use_build_context_synchronously
+                    Navigator.of(ctx).pop();
+                    // ignore: use_build_context_synchronously
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Endereço da base salvo!'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  },
+                  child: const Text(
+                    'Salvar',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   // Modal de FALHA (structuralmente espelhado ao modal de sucesso, tema vermelho)
@@ -2395,10 +2533,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     if (await f.exists()) {
                                       await finalizarEnvio(f, report);
                                     } else {
-                                      await _enviarWhatsApp(
-                                        report,
-                                        phone: numeroGestor,
-                                      );
+                                      await _enviarWhatsApp(report);
                                       try {
                                         _resetModalPhotos();
                                       } catch (_) {}
@@ -2407,19 +2542,13 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     debugPrint(
                                       'Erro ao anexar foto da falha: $e',
                                     );
-                                    await _enviarWhatsApp(
-                                      report,
-                                      phone: numeroGestor,
-                                    );
+                                    await _enviarWhatsApp(report);
                                     try {
                                       _resetModalPhotos();
                                     } catch (_) {}
                                   }
                                 } else {
-                                  await _enviarWhatsApp(
-                                    report,
-                                    phone: numeroGestor,
-                                  );
+                                  await _enviarWhatsApp(report);
                                   try {
                                     _resetModalPhotos();
                                   } catch (_) {}
@@ -2782,10 +2911,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         // Envio condicional explícito: OK envia apenas sua foto (`fotoEvidencia`)
                                         if (fotoEvidencia == null) {
                                           // Sem foto: enviar apenas texto via WhatsApp
-                                          await _enviarWhatsApp(
-                                            mensagem,
-                                            phone: numeroGestor,
-                                          );
+                                          await _enviarWhatsApp(mensagem);
                                           try {
                                             _resetModalPhotos();
                                           } catch (_) {}
@@ -2805,10 +2931,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                               );
                                             } else {
                                               // fallback para texto se arquivo não existir
-                                              await _enviarWhatsApp(
-                                                mensagem,
-                                                phone: numeroGestor,
-                                              );
+                                              await _enviarWhatsApp(mensagem);
                                             }
                                           } finally {
                                             try {
@@ -3841,34 +3964,6 @@ class RotaMotoristaState extends State<RotaMotorista>
                   },
                 ),
                 ListTile(
-                  leading: Icon(
-                    Icons.wifi_off,
-                    color: modoDia ? Colors.black87 : Colors.white70,
-                  ),
-                  title: Text(
-                    'Modo Offline',
-                    style: TextStyle(
-                      color: modoDia ? Colors.black : Colors.white,
-                    ),
-                  ),
-                  trailing: Switch(
-                    value: modoOffline,
-                    activeThumbColor: Colors.green,
-                    onChanged: (val) async {
-                      final navigator = Navigator.of(context);
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool('modo_offline', val);
-                      setState(() {
-                        modoOffline = val;
-                      });
-                      // Recarregar dados conforme o novo modo
-                      await carregarDados();
-                      if (!mounted) return;
-                      navigator.pop();
-                    },
-                  ),
-                ),
-                ListTile(
                   leading: Icon(Icons.palette, color: Colors.red),
                   title: Text(
                     '🎨 Cores dos Cards',
@@ -3879,6 +3974,22 @@ class RotaMotoristaState extends State<RotaMotorista>
                   onTap: () {
                     Navigator.pop(context);
                     _abrirModalEsquemasCores(context);
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.location_on,
+                    color: Colors.deepOrange,
+                  ),
+                  title: Text(
+                    '📍 Configurar Endereço da Base',
+                    style: TextStyle(
+                      color: modoDia ? Colors.black : Colors.white,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _configurarEnderecoBase();
                   },
                 ),
                 ListTile(
@@ -4139,10 +4250,50 @@ class RotaMotoristaState extends State<RotaMotorista>
                                 SizedBox(height: 12),
                                 FadeTransition(
                                   opacity: _buscarOpacity,
-                                  child: Text(
-                                    '🔍 Procurando novas rotas na sua região...',
-                                    style: TextStyle(color: Colors.white70),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.search,
+                                        color: Colors.white70,
+                                        size: 18,
+                                      ),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'Procurando novas rotas...',
+                                        style: TextStyle(color: Colors.white70),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
                                   ),
+                                ),
+                                SizedBox(height: 32),
+                                ElevatedButton.icon(
+                                  icon: const Icon(
+                                    Icons.business,
+                                    color: Colors.white,
+                                  ),
+                                  label: const Text(
+                                    'RETORNAR PARA A EMPRESA 🏢',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green.shade600,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 24,
+                                      vertical: 14,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(28),
+                                    ),
+                                  ),
+                                  onPressed: () =>
+                                      _abrirMapaComPreferencia('$_baseLat,$_baseLng'),
                                 ),
                               ],
                             ),
@@ -4157,7 +4308,39 @@ class RotaMotoristaState extends State<RotaMotorista>
                         final listaEntregas = snap.data ?? entregas;
                         if (listaEntregas.isEmpty) {
                           return Center(
-                            child: Text('Nenhuma entrega disponível'),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('Nenhuma entrega disponível'),
+                                const SizedBox(height: 32),
+                                ElevatedButton.icon(
+                                  icon: const Icon(
+                                    Icons.business,
+                                    color: Colors.white,
+                                  ),
+                                  label: const Text(
+                                    'RETORNAR PARA A EMPRESA 🏢',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green.shade600,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 24,
+                                      vertical: 14,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(28),
+                                    ),
+                                  ),
+                                  onPressed: () =>
+                                      _abrirMapaComPreferencia('$_baseLat,$_baseLng'),
+                                ),
+                              ],
+                            ),
                           );
                         }
                         return RefreshIndicator(
