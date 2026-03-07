@@ -606,6 +606,19 @@ class RotaMotoristaState extends State<RotaMotorista>
         return;
       }
 
+      // Captura imediata da posição para não depender só do stream (que pode demorar)
+      try {
+        final posInicial = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+          ),
+        );
+        if (mounted) setState(() => _currentPosition = posInicial);
+        debugPrint('📍 Posição inicial capturada: $posInicial');
+      } catch (e) {
+        debugPrint('📍 Erro ao capturar posição inicial: $e');
+      }
+
       // Antes de iniciar o stream, garantir que o motorista esteja aprovado
       final motoristaIdCheck = _motoristaId;
       if (motoristaIdCheck == '0' || motoristaIdCheck.isEmpty) {
@@ -3264,6 +3277,20 @@ class RotaMotoristaState extends State<RotaMotorista>
         // A lista já vem ordenada por id desc; atualizar estado substituindo a lista
         _setEntregas(List<dynamic>.from(lista));
         _atualizarContadores();
+        // Forçar captura de posição se o stream ainda não entregou nenhuma
+        if (_currentPosition == null) {
+          try {
+            final pos = await Geolocator.getCurrentPosition(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.high,
+              ),
+            );
+            if (mounted) setState(() => _currentPosition = pos);
+            debugPrint('📍 Posição forçada em carregarDados: $pos');
+          } catch (e) {
+            debugPrint('📍 Erro ao forçar posição em carregarDados: $e');
+          }
+        }
         // Geocodificar endereços em background para exibir distância nos cards
         _geocodificarEntregas(lista);
         debugPrint('✅ Dados carregados: ${lista.length} registros');
@@ -4379,7 +4406,9 @@ class RotaMotoristaState extends State<RotaMotorista>
             _geocodeCache[id] = null;
           }
         } else {
-          debugPrint('📍 GEO-CHECK: [$endereco] -> HTTP ${response.statusCode}');
+          debugPrint(
+            '📍 GEO-CHECK: [$endereco] -> HTTP ${response.statusCode}',
+          );
           _geocodeCache[id] = null;
         }
       } catch (e) {
@@ -4415,13 +4444,13 @@ class RotaMotoristaState extends State<RotaMotorista>
     final Color textSecondary = Colors.black87;
 
     // Calcular distância entre motorista e entrega
-    debugPrint(
-      '📡 GPS ATUAL: $_currentPosition | cache[${item['id']}]=${_geocodeCache[item['id']]}',
-    );
+    final String id = (item['id'] ?? '').toString();
     String? distanciaTexto;
-    if (_currentPosition != null) {
-      final id = item['id'] ?? '';
-      // Usar cache geocodificado (lat/lng do DB ou geocodificado pelo endereço)
+    Color badgeColor;
+    if (_currentPosition == null) {
+      distanciaTexto = '📍 Sem GPS';
+      badgeColor = Colors.orange.shade700;
+    } else {
       final coords = _geocodeCache[id];
       if (coords != null) {
         final metros = Geolocator.distanceBetween(
@@ -4430,14 +4459,18 @@ class RotaMotoristaState extends State<RotaMotorista>
           coords.$1,
           coords.$2,
         );
-        if (metros < 1000) {
-          distanciaTexto = '${metros.round()}m';
-        } else {
-          distanciaTexto = '${(metros / 1000).toStringAsFixed(1)} km';
-        }
+        distanciaTexto = metros < 1000
+            ? '${metros.round()}m'
+            : '${(metros / 1000).toStringAsFixed(1)} km';
+        badgeColor = Colors.green.shade600;
       } else if (!_geocodeCache.containsKey(id)) {
-        // Ainda calculando
-        distanciaTexto = '...';
+        // Geocodificação ainda não iniciou ou em andamento
+        distanciaTexto = '📍 Buscando...';
+        badgeColor = Colors.blueGrey;
+      } else {
+        // Geocodificação falhou para este endereço
+        distanciaTexto = '📍 Buscando...';
+        badgeColor = Colors.blueGrey;
       }
     }
 
@@ -4802,15 +4835,14 @@ class RotaMotoristaState extends State<RotaMotorista>
             ],
           ),
         ),
-        // Badge de distância em tempo real (canto superior direito) — DEBUG: fundo vermelho
-        if (distanciaTexto != null)
-          Positioned(
+        // Badge de distância / status GPS (canto superior direito)
+        Positioned(
             top: 18,
             right: 18,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.red,
+                color: badgeColor,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
