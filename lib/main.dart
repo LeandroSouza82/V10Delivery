@@ -4380,11 +4380,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         if (!_roadDistanceCache.containsKey(id)) {
           final coords = _geocodeCache[id];
           if (coords != null) {
-            final texto = await _consultarOsrm(
-              id,
-              coords.$1,
-              coords.$2,
-            );
+            final texto = await _consultarOsrm(id, coords.$1, coords.$2);
             _roadDistanceCache[id] = texto;
             if (mounted) setState(() {});
           }
@@ -4412,7 +4408,19 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
 
       try {
-        final query = Uri.encodeComponent('$endereco, Brasil');
+        // Remover complementos antes de enviar ao Nominatim (sala, apto, bloco, etc.)
+        // O `endereco` original não é modificado — aparece completo no card.
+        final enderecoParaApi = endereco
+            .replaceAll(
+              RegExp(
+                r'\s*[,\-]?\s*(sala|ap\.?|apto\.?|apartamento|bloco|bl\.?|fundos|loja|andar|pavimento|conj\.?|conjunto|unidade|un\.?)\b.*',
+                caseSensitive: false,
+              ),
+              '',
+            )
+            .trim();
+        debugPrint('📍 Nominatim: "$endereco" → "$enderecoParaApi"');
+        final query = Uri.encodeComponent('$enderecoParaApi, Brasil');
         final url = Uri.parse(
           'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1',
         );
@@ -4475,10 +4483,9 @@ class RotaMotoristaState extends State<RotaMotorista>
         'http://router.project-osrm.org/route/v1/driving/'
         '${pos.longitude},${pos.latitude};$destLng,$destLat?overview=false',
       );
-      final response = await http.get(
-        url,
-        headers: {'User-Agent': 'V10Delivery/1.0'},
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(url, headers: {'User-Agent': 'V10Delivery/1.0'})
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final routes = data['routes'] as List<dynamic>?;
