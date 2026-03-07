@@ -20,6 +20,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:convert';
+import 'package:firebase_core/firebase_core.dart';
 import 'location_service.dart';
 
 import 'services/cache_service.dart';
@@ -69,8 +70,15 @@ class ItemHistorico {
 final List<ItemHistorico> historicoEntregas = [];
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Firebase initialization and messaging removed: token handling now
-  // uses a SharedPreferences-backed fallback. Keep app bindings initialized.
+  // Inicializar Firebase para habilitar FCM (notificações push).
+  // Encapsulado em try-catch: sem google-services.json o app continua funcionando
+  // normalmente e o token FCM simplesmente não será obtido.
+  try {
+    await Firebase.initializeApp();
+    debugPrint('Firebase inicializado com sucesso.');
+  } catch (e) {
+    debugPrint('Firebase.initializeApp() falhou (sem google-services.json?): $e');
+  }
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
