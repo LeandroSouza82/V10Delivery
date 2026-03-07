@@ -200,7 +200,7 @@ class _DeliveryTaskHandler extends TaskHandler {
             .from('entregas')
             .select('*')
             .eq('motorista_id', uuidReal)
-            .or('status.eq.aguardando,status.eq.pendente')
+            .or('status.eq.aguardando,status.eq.pendente,status.eq.em_rota')
             .order('id', ascending: false);
 
         List<dynamic> lista;
@@ -530,11 +530,9 @@ Future<void> _enviarWhatsApp(String mensagem) async {
 
   // Fallback: api.whatsapp.com sem número
   try {
-    final Uri uriFallback = Uri.https(
-      'api.whatsapp.com',
-      '/send',
-      {'text': mensagem},
-    );
+    final Uri uriFallback = Uri.https('api.whatsapp.com', '/send', {
+      'text': mensagem,
+    });
     if (await canLaunchUrl(uriFallback)) {
       await launchUrl(uriFallback, mode: LaunchMode.externalApplication);
     }
@@ -2059,9 +2057,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       // Tentar abrir WhatsApp nativo (sem número fixo)
       try {
         final String textEncoded = Uri.encodeComponent(mensagem);
-        final Uri uriWhatsApp = Uri.parse(
-          'whatsapp://send?text=$textEncoded',
-        );
+        final Uri uriWhatsApp = Uri.parse('whatsapp://send?text=$textEncoded');
         if (await canLaunchUrl(uriWhatsApp)) {
           await launchUrl(uriWhatsApp, mode: LaunchMode.externalApplication);
           try {
@@ -3977,10 +3973,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                   },
                 ),
                 ListTile(
-                  leading: Icon(
-                    Icons.location_on,
-                    color: Colors.deepOrange,
-                  ),
+                  leading: Icon(Icons.location_on, color: Colors.deepOrange),
                   title: Text(
                     '📍 Configurar Endereço da Base',
                     style: TextStyle(
@@ -4292,8 +4285,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       borderRadius: BorderRadius.circular(28),
                                     ),
                                   ),
-                                  onPressed: () =>
-                                      _abrirMapaComPreferencia('$_baseLat,$_baseLng'),
+                                  onPressed: () => _abrirMapaComPreferencia(
+                                    '$_baseLat,$_baseLng',
+                                  ),
                                 ),
                               ],
                             ),
@@ -4336,8 +4330,9 @@ class RotaMotoristaState extends State<RotaMotorista>
                                       borderRadius: BorderRadius.circular(28),
                                     ),
                                   ),
-                                  onPressed: () =>
-                                      _abrirMapaComPreferencia('$_baseLat,$_baseLng'),
+                                  onPressed: () => _abrirMapaComPreferencia(
+                                    '$_baseLat,$_baseLng',
+                                  ),
                                 ),
                               ],
                             ),
