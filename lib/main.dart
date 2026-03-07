@@ -1389,13 +1389,13 @@ class RotaMotoristaState extends State<RotaMotorista>
         setState(() => _esquemaCores = 1);
       }
     });
-    // Carregar preferência de modo offline (default true)
+    // Carregar preferência de modo offline (default false)
     SharedPreferences.getInstance().then((prefs) {
       final mo = prefs.getBool('modo_offline');
       if (mo != null) {
         setState(() => modoOffline = mo);
       } else {
-        setState(() => modoOffline = true);
+        setState(() => modoOffline = false);
       }
     });
     // DEBUG: abrir Drawer automaticamente se a flag estiver setada nas prefs
