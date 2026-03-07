@@ -2826,9 +2826,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     orElse: () => {'endereco': ''},
                                   )['endereco'];
 
+                                  final rotuloLocal = (opcaoSelecionada == 'OUTROS') ? 'Cliente' : 'Local';
                                   final mensagem = isAta
                                       ? '📄 ATA REGISTRADA COM SUCESSO ✅\n'
-                                            '*Local:* $nomeCliente\n'
+                                            '*$rotuloLocal:* $nomeCliente\n'
                                             '*Endereço:* ${enderecoCliente ?? ''}\n'
                                             '*Motorista:* $nomeMotorista\n'
                                             '*Hora:* $hora'
