@@ -176,7 +176,10 @@ class RotaMotoristaState extends State<RotaMotorista>
   Future<void> enviarWhatsApp(String mensagem, {String? phone}) async {
     try {
       // Garante que só números vão para o wa.me
-      final String phoneRaw = (phone ?? numeroGestor).replaceAll(RegExp(r'[^0-9]'), '');
+      final String phoneRaw = (phone ?? numeroGestor).replaceAll(
+        RegExp(r'[^0-9]'),
+        '',
+      );
       final String encoded = Uri.encodeComponent(mensagem);
       final Uri wa = Uri.parse('https://wa.me/$phoneRaw?text=$encoded');
       await launchUrl(wa, mode: LaunchMode.externalApplication);
@@ -362,7 +365,11 @@ class RotaMotoristaState extends State<RotaMotorista>
       final nowIso = DateTime.now().toUtc().toIso8601String();
       await Supabase.instance.client
           .from('motoristas')
-          .update({'esta_online': true, 'ultima_atualizacao': nowIso})
+          .update({
+            'esta_online': true,
+            'status': 'disponivel',
+            'ultima_atualizacao': nowIso,
+          })
           .eq('id', heartbeatId);
       debugPrint('atualizarSinalOnline enviado para $heartbeatId @ $nowIso');
     } catch (e) {
@@ -559,36 +566,56 @@ class RotaMotoristaState extends State<RotaMotorista>
   Future<List<Map<String, dynamic>>> _fetchEntregasForDriver(
     String idLogado,
   ) async {
+    final idTrimmed = idLogado.trim();
+    debugPrint('🔍 Buscando entregas para motorista: [$idTrimmed]');
     try {
       var builder = Supabase.instance.client.from('entregas').select();
-      builder = builder.eq('motorista_id', idLogado as Object);
+      builder = builder.eq('motorista_id', idTrimmed);
       if (_filtroSelecionado != 'TODOS') {
         builder = builder.eq('tipo', _filtroSelecionado as Object);
       }
-      // active statuses
-      builder = builder.or('status.eq.pendente,status.eq.em_rota');
+      builder = builder.or(
+        'status.eq.pendente,status.eq.em_rota,status.eq.aguardando,status.eq.adicionado',
+      );
 
       final dynamic resp = await builder.order(
         'ordem_logistica',
         ascending: true,
       );
       final raw = resp as List<dynamic>? ?? <dynamic>[];
+      debugPrint('📦 Pedidos recebidos: ${raw.length}');
       return raw
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList(growable: false);
     } catch (e) {
-      debugPrint('Erro fetching entregas: $e');
+      debugPrint('❌ Erro ao buscar entregas: $e');
       return <Map<String, dynamic>>[];
     }
   }
 
   Future<void> _initEntregasRealtime() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final idLogado =
-          prefs.getString('driver_uuid') ??
-          Supabase.instance.client.auth.currentUser?.id;
+      // Retry para resolver race condition: buscarIdentidadeReal() pode ainda não ter
+      // salvo o driver_uuid no SharedPrefs quando _initEntregasRealtime é chamado.
+      String? idLogado;
+      for (int tentativa = 0; tentativa < 8; tentativa++) {
+        final prefs = await SharedPreferences.getInstance();
+        idLogado =
+            prefs.getString('driver_uuid') ??
+            Supabase.instance.client.auth.currentUser?.id;
+        if (idLogado != null && idLogado.isNotEmpty) break;
+        debugPrint('⏳ _initEntregasRealtime: aguardando UUID (tentativa ${tentativa + 1}/8)...');
+        await Future.delayed(const Duration(seconds: 1));
+      }
+      final dbgUuid = (await SharedPreferences.getInstance()).getString('driver_uuid');
+      final dbgAuthId = Supabase.instance.client.auth.currentUser?.id;
+      debugPrint(
+        '🆔 _initEntregasRealtime: driver_uuid=$dbgUuid | auth.id=$dbgAuthId | usando=$idLogado',
+      );
       if (idLogado == null) {
+        debugPrint(
+          '⚠️ _initEntregasRealtime: nenhum ID encontrado, lista ficará vazia.',
+        );
         _entregasController?.add(<Map<String, dynamic>>[]);
         return;
       }
@@ -609,7 +636,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             'filter': 'motorista_id=eq.$idLogado',
           },
           (payload, [ref]) async {
-            final next = await _fetchEntregasForDriver(idLogado);
+            final next = await _fetchEntregasForDriver(idLogado!);
             if (_entregasController != null && !_entregasController!.isClosed) {
               _entregasController!.add(next);
             }
@@ -623,7 +650,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             t.cancel();
             return;
           }
-          final next = await _fetchEntregasForDriver(idLogado);
+          final next = await _fetchEntregasForDriver(idLogado!);
           if (!_entregasController!.isClosed) _entregasController!.add(next);
         });
       }
@@ -1477,6 +1504,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                       final ts = DateTime.now().toUtc().toIso8601String();
                       final payload = {
                         'esta_online': false,
+                        'status': 'offline',
                         'ultima_atualizacao': ts,
                       };
                       try {
@@ -1484,7 +1512,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                           await Supabase.instance.client
                               .from('motoristas')
                               .update(payload)
-                              .eq('uuid', uuid);
+                              .eq('id', uuid); // coluna é 'id', não 'uuid'
                         } else if (id > 0) {
                           await Supabase.instance.client
                               .from('motoristas')

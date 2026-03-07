@@ -6,7 +6,6 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:internet_connection_checker/internet_connection_checker.dart';
 import 'package:intl/intl.dart';
 import 'package:map_launcher/map_launcher.dart';
 import 'package:path/path.dart' as p;
@@ -77,7 +76,9 @@ Future<void> main() async {
     await Firebase.initializeApp();
     debugPrint('Firebase inicializado com sucesso.');
   } catch (e) {
-    debugPrint('Firebase.initializeApp() falhou (sem google-services.json?): $e');
+    debugPrint(
+      'Firebase.initializeApp() falhou (sem google-services.json?): $e',
+    );
   }
   // Forçar orientação apenas em vertical (portrait)
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -217,7 +218,7 @@ class _DeliveryTaskHandler extends TaskHandler {
         } catch (_) {
           lista = <dynamic>[];
         }
-        // debugPrint('📦 Entregas encontradas: ${lista.length}');
+        debugPrint('📦 Pedidos recebidos (background): ${lista.length}');
 
         FlutterForegroundTask.sendDataToMain({
           'entregas': lista,
@@ -1748,7 +1749,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     }
   }
 
-  // Atualiza o campo `esta_online` do motorista no Supabase
+  // Atualiza o campo `esta_online` e `status` do motorista no Supabase
   Future<void> _atualizarStatusNoSupabase(bool status) async {
     try {
       String idToUse = '';
@@ -1764,7 +1765,11 @@ class RotaMotoristaState extends State<RotaMotorista>
       if (idToUse.isEmpty || idToUse == '0') return;
       await Supabase.instance.client
           .from('motoristas')
-          .update({'esta_online': status})
+          .update({
+            'esta_online': status,
+            'status': status ? 'disponivel' : 'offline',
+            'ultima_atualizacao': DateTime.now().toUtc().toIso8601String(),
+          })
           .eq('id', idToUse);
     } catch (e) {
       debugPrint('Erro status: $e');
@@ -3089,7 +3094,8 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Carrega dados da tabela 'entregas' no Supabase e atualiza a lista local
   Future<void> carregarDados() async {
-    // Se estiver em modo offline, não usar dados fictícios; tentar usar cache local
+    debugPrint('⚡ carregarDados: iniciando. modoOffline=$modoOffline');
+    // Se estiver em modo offline, usar cache local
     if (modoOffline) {
       if (!mounted) return;
       try {
@@ -3121,13 +3127,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     // Checar conectividade básica antes de tentar alcançar o Supabase
     Future<bool> checarConexao() async {
       try {
-        // Checa se há conectividade de rede (Wi-Fi/4G)
         final conn = await Connectivity().checkConnectivity();
-        if (conn == ConnectivityResult.none) return false;
-
-        // Verifica que existe acesso real à internet (resolução/ICMP-like)
-        final has = await InternetConnectionChecker().hasConnection;
-        return has;
+        return conn != ConnectivityResult.none;
       } catch (e) {
         return false;
       }
@@ -3248,20 +3249,22 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
       debugPrint('📞 Gestor atual: $numeroGestor');
 
-      // Fazer query ordenando por `id` desc para trazer os pedidos mais recentes primeiro
+      final driverIdTrimmed = driverIdForQuery.trim();
+      debugPrint('📥 Buscando entregas para motorista [$driverIdTrimmed]...');
       dynamic response = await r.retry(() async {
         return await Supabase.instance.client
             .from('entregas')
             .select('*')
-            .eq('motorista_id', driverIdForQuery)
-            .or('status.eq.pendente,status.eq.em_rota')
-            .order('id', ascending: false);
+            .eq('motorista_id', driverIdTrimmed)
+            .or('status.eq.pendente,status.eq.em_rota,status.eq.aguardando,status.eq.adicionado')
+            .order('ordem_logistica', ascending: true);
       }, retryIf: (e) => e is SocketException || e is TimeoutException);
 
       if (!mounted) return;
 
       final listaRaw = response as List<dynamic>?;
       if (listaRaw != null) {
+        debugPrint('📦 Pedidos recebidos: ${listaRaw.length}');
         final lista = listaRaw.map<Map<String, String>>((e) {
           final m = Map<String, dynamic>.from(e as Map);
           return {
