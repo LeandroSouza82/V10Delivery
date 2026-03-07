@@ -4369,7 +4369,37 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  /// Geocodifica os endereços das entregas via Nominatim (OpenStreetMap) — sem plugin nativo.
+  /// Limpa e ancora geograficamente um endereço antes de enviar ao Nominatim.
+  /// O motorista NUNCA vê essa string — ela afeta apenas a chamada de API.
+  ///
+  /// Exemplo:
+  ///   Entrada: "Av. Pres. Kennedy 1333 sala 308 - Campinas"
+  ///   Saída:   "Av. Pres. Kennedy 1333 Campinas, São José, SC, Brasil"
+  String _limparEndereco(String raw) {
+    // 1. Cortar tudo a partir de complementos
+    var s = raw.replaceAll(
+      RegExp(
+        r'\s*[,\-\/]?\s*'
+        r'(sala|ap\.?|apto\.?|apartamento|bloco|bl\.?|'
+        r'fundos|loja|andar|pavto?\.?|pavimento|'
+        r'conj\.?|conjunto|unidade|un\.?|cj\.?)'
+        r'\b.*',
+        caseSensitive: false,
+      ),
+      '',
+    );
+
+    // 2. Cortar traço ou barra solto no final (ex: "Rua X, 10 -")
+    s = s.replaceAll(RegExp(r'[\-\/,]\s*$'), '').trim();
+
+    // 3. Colapsar espaços múltiplos e remover caracteres de controle
+    s = s.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+
+    // 4. Ancoragem geográfica — força cidade/estado para evitar geocoding errado
+    //    (ex: evita confundir Campinas/SP com o bairro Campinas em São José/SC)
+    return '$s, São José, SC, Brasil';
+  }
+
   /// Geocodifica endereços via Nominatim e, logo após obter as coordenadas,
   /// consulta o OSRM para a distância real por vias.
   Future<void> _geocodificarEntregas(List<Map<String, String>> lista) async {
@@ -4408,19 +4438,10 @@ class RotaMotoristaState extends State<RotaMotorista>
       }
 
       try {
-        // Remover complementos antes de enviar ao Nominatim (sala, apto, bloco, etc.)
-        // O `endereco` original não é modificado — aparece completo no card.
-        final enderecoParaApi = endereco
-            .replaceAll(
-              RegExp(
-                r'\s*[,\-]?\s*(sala|ap\.?|apto\.?|apartamento|bloco|bl\.?|fundos|loja|andar|pavimento|conj\.?|conjunto|unidade|un\.?)\b.*',
-                caseSensitive: false,
-              ),
-              '',
-            )
-            .trim();
+        // Limpar e ancorar geograficamente — o `endereco` original NÃO é tocado.
+        final enderecoParaApi = _limparEndereco(endereco);
         debugPrint('📍 Nominatim: "$endereco" → "$enderecoParaApi"');
-        final query = Uri.encodeComponent('$enderecoParaApi, Brasil');
+        final query = Uri.encodeComponent(enderecoParaApi);
         final url = Uri.parse(
           'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1',
         );
