@@ -3308,6 +3308,12 @@ class RotaMotoristaState extends State<RotaMotorista>
           }
         }
         // Geocodificar endereços em background para exibir distância nos cards
+        // Limpar caches para forçar recálculo com lógica de limpeza atualizada
+        for (final it in lista) {
+          final rid = it['id'] ?? '';
+          _geocodeCache.remove(rid);
+          _roadDistanceCache.remove(rid);
+        }
         _geocodificarEntregas(lista);
         debugPrint('✅ Dados carregados: ${lista.length} registros');
         // Log produtivo de sucesso do polling
@@ -4369,12 +4375,12 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
   }
 
-  /// Limpa e ancora geograficamente um endereço antes de enviar ao Nominatim.
+  /// Limpa um endereço antes de enviar ao Nominatim (remove complementos).
   /// O motorista NUNCA vê essa string — ela afeta apenas a chamada de API.
   ///
   /// Exemplo:
   ///   Entrada: "Av. Pres. Kennedy 1333 sala 308 - Campinas"
-  ///   Saída:   "Av. Pres. Kennedy 1333 Campinas, São José, SC, Brasil"
+  ///   Saída:   "Av. Pres. Kennedy 1333, Brasil"
   String _limparEndereco(String raw) {
     // 1. Cortar tudo a partir de complementos
     var s = raw.replaceAll(
@@ -4392,12 +4398,12 @@ class RotaMotoristaState extends State<RotaMotorista>
     // 2. Cortar traço ou barra solto no final (ex: "Rua X, 10 -")
     s = s.replaceAll(RegExp(r'[\-\/,]\s*$'), '').trim();
 
-    // 3. Colapsar espaços múltiplos e remover caracteres de controle
+    // 3. Colapsar espaços múltiplos
     s = s.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
 
-    // 4. Ancoragem geográfica — força cidade/estado para evitar geocoding errado
-    //    (ex: evita confundir Campinas/SP com o bairro Campinas em São José/SC)
-    return '$s, São José, SC, Brasil';
+    // 4. Ancorar apenas ao país para não forçar cidade errada
+    //    (endereços podem ser em qualquer cidade da região)
+    return '$s, Brasil';
   }
 
   /// Geocodifica endereços via Nominatim e, logo após obter as coordenadas,
