@@ -4346,17 +4346,22 @@ class RotaMotoristaState extends State<RotaMotorista>
       // Fallback: geocodificar pelo endereço
       final endereco = item['endereco'] ?? '';
       if (endereco.isEmpty) {
+        debugPrint('📍 GEO-CHECK: id=$id endereço vazio, pulando.');
         _geocodeCache[id] = null;
         continue;
       }
       try {
         final List<Location> locs = await locationFromAddress(endereco);
+        debugPrint('📍 GEO-CHECK: [$endereco] -> $locs');
         if (locs.isNotEmpty) {
           _geocodeCache[id] = (locs.first.latitude, locs.first.longitude);
+          debugPrint('📍 GEO-CHECK: cache salvo -> (${locs.first.latitude}, ${locs.first.longitude})');
         } else {
+          debugPrint('📍 GEO-CHECK: [$endereco] -> lista vazia, sem coords.');
           _geocodeCache[id] = null;
         }
-      } catch (_) {
+      } catch (e) {
+        debugPrint('📍 GEO-CHECK: [$endereco] -> ERRO: $e');
         _geocodeCache[id] = null;
       }
       if (mounted) setState(() {});
@@ -4388,6 +4393,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     final Color textSecondary = Colors.black87;
 
     // Calcular distância entre motorista e entrega
+    debugPrint('📡 GPS ATUAL: $_currentPosition | cache[${item['id']}]=${_geocodeCache[item['id']]}');
     String? distanciaTexto;
     if (_currentPosition != null) {
       final id = item['id'] ?? '';
@@ -4412,6 +4418,7 @@ class RotaMotoristaState extends State<RotaMotorista>
     }
 
     return Stack(
+      clipBehavior: Clip.none,
       children: [
         Container(
           margin: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -4771,7 +4778,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             ],
           ),
         ),
-        // Badge de distância em tempo real (canto superior direito)
+        // Badge de distância em tempo real (canto superior direito) — DEBUG: fundo vermelho
         if (distanciaTexto != null)
           Positioned(
             top: 18,
@@ -4779,7 +4786,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.blue.shade700,
+                color: Colors.red,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
