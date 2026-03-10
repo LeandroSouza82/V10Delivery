@@ -2270,7 +2270,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 children: [
                   Expanded(
                     child: Text(
-                      'FALHA',
+                      '${tipo == 'outros' ? 'OUTROS/ATAS' : tipo.toUpperCase()} - FALHA',
                       style: TextStyle(
                         color: textColor,
                         fontWeight: FontWeight.bold,
@@ -2498,8 +2498,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                               final report =
                                   '------------- *$cabecalho* -------------\n'
                                   '*Status:* ${ehAta ? '❌ ATA NÃO REGISTRADA' : '❌ Falha'}\n'
-                                  '*Motivo:* $motivoFinal\n'
-                                  '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
+                                  '${ehAta ? (detalhes.isNotEmpty ? '*Obs:* $detalhes\n' : '') : '*Motivo:* $motivoFinal\n${detalhes.isNotEmpty ? "*Obs:* $detalhes\n" : ""}'}'
                                   '*Cliente:* $cliente\n'
                                   '*Endereço:* $endereco\n'
                                   '*Motorista:* $nomeMotorista\n'
@@ -2606,7 +2605,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                 children: [
                   Expanded(
                     child: Text(
-                      'ENTREGA',
+                      tipo == 'outros' ? 'OUTROS/ATAS' : tipo.toUpperCase(),
                       style: TextStyle(
                         color: textColor,
                         fontWeight: FontWeight.bold,
@@ -2736,8 +2735,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
                             backgroundColor:
-                                ((opcaoSelecionada != null) ||
-                                    (obsTexto.trim().length >= 3))
+                                (tipo == 'outros'
+                                    ? obsTexto.trim().isNotEmpty
+                                    : ((opcaoSelecionada != null) ||
+                                          (obsTexto.trim().length >= 3)))
                                 ? Colors.green
                                 : Colors.grey[700],
                             padding: EdgeInsets.symmetric(vertical: 12),
@@ -2750,8 +2751,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                             ),
                           ),
                           onPressed:
-                              ((opcaoSelecionada != null) ||
-                                  (obsTexto.trim().length >= 3))
+                              (tipo == 'outros'
+                                  ? obsTexto.trim().isNotEmpty
+                                  : ((opcaoSelecionada != null) ||
+                                        (obsTexto.trim().length >= 3)))
                               ? () async {
                                   // Monta 'recebidoPor' conforme regras:
                                   // *Recebido por:* [OPCAO] [CONTEUDO_OBSERVACOES] ([CONTEUDO_Nº])
@@ -2808,10 +2811,26 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   final String cabecalho = tipo == 'outros'
                                       ? 'OUTROS/ATAS'
                                       : tipo.toUpperCase();
+
+                                  // Linha dinâmica: NUNCA exibe 'Recebido por' para tipo 'outros'
+                                  final String linhaExtra;
+                                  if (tipo == 'outros') {
+                                    // outros: exibe apenas Obs se houver, sem recebedor
+                                    linhaExtra = obsTexto.trim().isNotEmpty
+                                        ? '*Obs:* ${obsTexto.trim()}\n'
+                                        : '';
+                                  } else if (tipo == 'recolha') {
+                                    linhaExtra =
+                                        '*Entregue por:* $recebidoPor\n';
+                                  } else {
+                                    linhaExtra =
+                                        '*Recebido por:* $recebidoPor\n';
+                                  }
+
                                   final mensagem =
                                       '------------- *$cabecalho* -------------\n'
                                       '*Status:* ${ehAta ? '✅ ATA REGISTRADA' : '✅ Sucesso'}\n'
-                                      '${ehAta ? '' : '*${tipo == 'recolha' ? 'Entregue por' : 'Recebido por'}:* $recebidoPor\n'}'
+                                      '$linhaExtra'
                                       '*Cliente:* $nomeCliente\n'
                                       '*Endereço:* ${enderecoCliente ?? ''}\n'
                                       '*Motorista:* $nomeMotorista\n'
