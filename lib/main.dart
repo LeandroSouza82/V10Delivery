@@ -2222,8 +2222,11 @@ class RotaMotoristaState extends State<RotaMotorista>
   void _buildFailModal(BuildContext ctx, Map<String, dynamic> item) {
     // ignore: unused_local_variable
     final String nomeCliente = item['cliente'] ?? '';
-    final bool isAta =
-        (item['tipo'] ?? '').toString().trim().toLowerCase() == 'outros';
+    final String tipo = (item['tipo'] ?? 'entrega')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final bool isAta = tipo == 'outros';
     _resetModalPhotos();
     String? motivoSelecionadoLocal;
     String obsTexto = '';
@@ -2486,21 +2489,21 @@ class RotaMotoristaState extends State<RotaMotorista>
                               final hora = DateFormat(
                                 'HH:mm',
                               ).format(DateTime.now());
-                              final report = isAta
-                                  ? '⚠️ ATA NÃO REGISTRADA ❌\n'
-                                        '*Cliente:* $cliente\n'
-                                        '*Motivo:* $motivoFinal\n'
-                                        '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
-                                        '*Local:* $endereco\n'
-                                        '*Motorista:* $nomeMotorista\n'
-                                        '*Hora:* $hora'
-                                  : '*Status:* ❌ Falha\n'
-                                        '*Motivo:* $motivoFinal\n'
-                                        '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
-                                        '*Cliente:* $cliente\n'
-                                        '*Endereço:* $endereco\n'
-                                        '*Motorista:* $nomeMotorista\n'
-                                        '*Hora:* $hora';
+                              final bool ehAta = obsTexto
+                                  .toLowerCase()
+                                  .contains('ata');
+                              final String cabecalho = tipo == 'outros'
+                                  ? 'OUTROS/ATAS'
+                                  : tipo.toUpperCase();
+                              final report =
+                                  '------------- *$cabecalho* -------------\n'
+                                  '*Status:* ${ehAta ? '❌ ATA NÃO REGISTRADA' : '❌ Falha'}\n'
+                                  '*Motivo:* $motivoFinal\n'
+                                  '${detalhes.isNotEmpty ? '*Detalhes:* $detalhes\n' : ''}'
+                                  '*Cliente:* $cliente\n'
+                                  '*Endereço:* $endereco\n'
+                                  '*Motorista:* $nomeMotorista\n'
+                                  '*Hora:* $hora';
 
                               try {
                                 if (imagemFalha != null) {
@@ -2569,8 +2572,10 @@ class RotaMotoristaState extends State<RotaMotorista>
   void _buildSuccessModal(BuildContext ctx, Map<String, dynamic> item) {
     // ignore: unused_local_variable
     final String nomeCliente = item['cliente'] ?? '';
-    final bool isAta =
-        (item['tipo'] ?? '').toString().trim().toLowerCase() == 'outros';
+    final String tipo = (item['tipo'] ?? 'entrega')
+        .toString()
+        .trim()
+        .toLowerCase();
     _resetModalPhotos();
     String? opcaoSelecionada;
     String obsTexto = '';
@@ -2797,22 +2802,20 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     orElse: () => {'endereco': ''},
                                   )['endereco'];
 
-                                  final rotuloLocal =
-                                      (opcaoSelecionada == 'OUTROS')
-                                      ? 'Cliente'
-                                      : 'Local';
-                                  final mensagem = isAta
-                                      ? '📄 ATA REGISTRADA COM SUCESSO ✅\n'
-                                            '*$rotuloLocal:* $nomeCliente\n'
-                                            '*Endereço:* ${enderecoCliente ?? ''}\n'
-                                            '*Motorista:* $nomeMotorista\n'
-                                            '*Hora:* $hora'
-                                      : '*Status:* ✅ Sucesso\n'
-                                            '*Recebido por:* $recebidoPor\n'
-                                            '*Cliente:* $nomeCliente\n'
-                                            '*Endereço:* ${enderecoCliente ?? ''}\n'
-                                            '*Motorista:* $nomeMotorista\n'
-                                            '*Hora:* $hora';
+                                  final bool ehAta = obsTexto
+                                      .toLowerCase()
+                                      .contains('ata');
+                                  final String cabecalho = tipo == 'outros'
+                                      ? 'OUTROS/ATAS'
+                                      : tipo.toUpperCase();
+                                  final mensagem =
+                                      '------------- *$cabecalho* -------------\n'
+                                      '*Status:* ${ehAta ? '✅ ATA REGISTRADA' : '✅ Sucesso'}\n'
+                                      '${ehAta ? '' : '*${tipo == 'recolha' ? 'Entregue por' : 'Recebido por'}:* $recebidoPor\n'}'
+                                      '*Cliente:* $nomeCliente\n'
+                                      '*Endereço:* ${enderecoCliente ?? ''}\n'
+                                      '*Motorista:* $nomeMotorista\n'
+                                      '*Hora:* $hora';
 
                                   // anexar foto se existente (capturada aqui ou em sessão)
                                   final List<XFile> files = [];
