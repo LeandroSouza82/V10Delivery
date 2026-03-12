@@ -560,6 +560,10 @@ class RotaMotoristaState extends State<RotaMotorista>
 
   // Geolocation: subscription para rastreamento em tempo real
   StreamSubscription<Position>? _positionSubscription;
+  // Broadcast stream de posição — usado pelos StreamBuilders dos cards para
+  // recalcular a distância em tempo real sem reconstruir o card inteiro.
+  final StreamController<Position> _positionStreamController =
+      StreamController<Position>.broadcast();
   // Posição atual do motorista para cálculo de distância nos cards
   Position? _currentPosition;
   // Cache de coordenadas geocodificadas: entregaId -> (lat, lng)
@@ -656,45 +660,48 @@ class RotaMotoristaState extends State<RotaMotorista>
         await _positionSubscription?.cancel();
       } catch (_) {}
 
-      _positionSubscription =
-          Geolocator.getPositionStream(locationSettings: settings).listen(
-            (Position pos) async {
-              // Atualizar posição atual para distância nos cards
-              if (mounted) setState(() => _currentPosition = pos);
-              // Recalcular distâncias OSRM apenas se o motorista se deslocou mais de 500 m.
-              // Threshold alto evita que variações de sinal GPS causem flickering contínuo.
-              final anterior = _lastOsrmPosition;
-              if (anterior == null ||
-                  Geolocator.distanceBetween(
-                        anterior.latitude,
-                        anterior.longitude,
-                        pos.latitude,
-                        pos.longitude,
-                      ) >
-                      500) {
-                _recalcularTodasOsrm();
-              }
-              try {
-                final motoristaId = _motoristaId;
-                // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
-                if (motoristaId == '0' || motoristaId.isEmpty) return;
+      _positionSubscription = Geolocator.getPositionStream(locationSettings: settings).listen(
+        (Position pos) async {
+          // Atualizar posição atual para distância nos cards
+          if (mounted) setState(() => _currentPosition = pos);
+          // Propagar para o stream broadcast — atualiza badges dos cards em tempo real
+          if (!_positionStreamController.isClosed) {
+            _positionStreamController.add(pos);
+          }
+          // Recalcular distâncias OSRM apenas se o motorista se deslocou mais de 500 m.
+          // Threshold alto evita que variações de sinal GPS causem flickering contínuo.
+          final anterior = _lastOsrmPosition;
+          if (anterior == null ||
+              Geolocator.distanceBetween(
+                    anterior.latitude,
+                    anterior.longitude,
+                    pos.latitude,
+                    pos.longitude,
+                  ) >
+                  500) {
+            _recalcularTodasOsrm();
+          }
+          try {
+            final motoristaId = _motoristaId;
+            // Proteção: evita enviar '0' ou vazio para o Supabase (evita 22P02)
+            if (motoristaId == '0' || motoristaId.isEmpty) return;
 
-                await Supabase.instance.client
-                    .from('motoristas')
-                    .update({
-                      'lat': pos.latitude,
-                      'lng': pos.longitude,
-                      'ultima_atualizacao': DateTime.now().toIso8601String(),
-                    })
-                    .eq('id', motoristaId);
-              } catch (e) {
-                debugPrint('Erro ao atualizar localização no Supabase: $e');
-              }
-            },
-            onError: (err) {
-              debugPrint('Erro stream geolocalização: $err');
-            },
-          );
+            await Supabase.instance.client
+                .from('motoristas')
+                .update({
+                  'lat': pos.latitude,
+                  'lng': pos.longitude,
+                  'ultima_atualizacao': DateTime.now().toIso8601String(),
+                })
+                .eq('id', motoristaId);
+          } catch (e) {
+            debugPrint('Erro ao atualizar localização no Supabase: $e');
+          }
+        },
+        onError: (err) {
+          debugPrint('Erro stream geolocalização: $err');
+        },
+      );
     } catch (e) {
       debugPrint('Erro ao iniciar rastreamento: $e');
     }
@@ -1457,6 +1464,9 @@ class RotaMotoristaState extends State<RotaMotorista>
     } catch (_) {}
     try {
       _positionSubscription?.cancel();
+    } catch (_) {}
+    try {
+      _positionStreamController.close();
     } catch (_) {}
     try {
       _heartbeatTimer?.cancel();
@@ -2453,12 +2463,32 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   '';
                               final detalhes = obsTexto.trim();
 
+                              // Capturar localização GPS no momento exato da falha
+                              double? latFalhaModal;
+                              double? lngFalhaModal;
+                              try {
+                                final pos = await Geolocator.getCurrentPosition(
+                                  locationSettings: const LocationSettings(
+                                    accuracy: LocationAccuracy.high,
+                                    timeLimit: Duration(seconds: 5),
+                                  ),
+                                );
+                                latFalhaModal = pos.latitude;
+                                lngFalhaModal = pos.longitude;
+                              } catch (_) {
+                                // GPS indisponível — campos ficam nulos
+                              }
+
                               final payload = {
                                 'status': 'falha',
                                 'tipo_recebedor': motivoFinal,
                                 'obs': detalhes,
                                 'data_conclusao': DateTime.now()
                                     .toIso8601String(),
+                                if (latFalhaModal != null)
+                                  'lat_conclusao': latFalhaModal,
+                                if (lngFalhaModal != null)
+                                  'lng_conclusao': lngFalhaModal,
                               };
                               try {
                                 final dynamic res = await Supabase
@@ -3105,27 +3135,57 @@ class RotaMotoristaState extends State<RotaMotorista>
     );
 
     try {
-      // Tentar recuperar o `driverId` salvo no storage do foreground task
+      // ── Resolução do ID do motorista ─────────────────────────────────────
+      // PRIORIDADE 1: ID autenticado pelo Supabase Auth (currentUser.id).
+      //   É o mesmo UUID usado pelo Heartbeat e pelo LocationService.
+      // PRIORIDADE 2: ID salvo no storage do foreground task (fallback).
+      //   Útil quando a sessão ainda está sendo restaurada na inicialização.
+      // Se nenhum for válido, abortamos para evitar busca com ID errado.
+
+      final String? authId = Supabase.instance.client.auth.currentUser?.id
+          .trim();
+
       String? storedId;
       try {
         storedId = await FlutterForegroundTask.getData<String>(key: 'driverId');
+        storedId = storedId?.trim();
       } catch (e) {
         debugPrint('Erro ao ler driverId do foreground storage: $e');
         storedId = null;
       }
 
       String driverIdForQuery;
-      if (storedId != null && storedId.isNotEmpty && storedId != '0') {
+      if (authId != null && authId.isNotEmpty && authId != '0') {
+        // Usa sempre o ID do Auth — garante que Polling e Heartbeat falam o mesmo UUID.
+        driverIdForQuery = authId;
+        if (storedId != null && storedId.isNotEmpty && storedId != authId) {
+          debugPrint(
+            '⚠️ carregarDados(): ID do storage ("$storedId") difere do Auth ("$authId"). '
+            'Usando Auth como fonte de verdade.',
+          );
+        }
+      } else if (storedId != null && storedId.isNotEmpty && storedId != '0') {
+        // Auth ainda não disponível; usa o storage como fallback temporário.
         driverIdForQuery = storedId;
+        debugPrint(
+          '⚠️ carregarDados(): Auth sem sessão ativa, usando ID do storage ("$storedId").',
+        );
       } else {
         debugPrint(
-          '⚠️ carregarDados(): driverId salvo inválido ou ausente ("$storedId"). Abortando.',
+          '⚠️ carregarDados(): Nenhum ID válido disponível '
+          '(auth="$authId", storage="$storedId"). Abortando.',
         );
         _setEntregas([]);
         _atualizarContadores();
         return;
       }
 
+      // Sincronizar _motoristaId para garantir consistência com Heartbeat/LocationService.
+      if (_motoristaId != driverIdForQuery) {
+        _motoristaId = driverIdForQuery;
+      }
+
+      debugPrint('DEBUG: Buscando pedidos com o ID real: $driverIdForQuery');
       debugPrint('📥 Buscando dados para motorista $driverIdForQuery...');
 
       // Ler número do gestor dinamicamente da tabela `configuracoes` (chave 'gestor_phone')
@@ -3817,10 +3877,10 @@ class RotaMotoristaState extends State<RotaMotorista>
                       FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Text(
-                          drawerName,
-                          style: TextStyle(
+                          'Olá, ${drawerName.trim().split(' ').first} 👋',
+                          style: const TextStyle(
                             fontSize: 20,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w600,
                             color: Colors.white,
                           ),
                         ),
@@ -4585,27 +4645,8 @@ class RotaMotoristaState extends State<RotaMotorista>
     final Color textPrimary = Colors.black;
     final Color textSecondary = Colors.black87;
 
-    // Exibir distância real por vias (OSRM) no badge do card
+    // ID do card — usado pelo StreamBuilder do badge de distância
     final String id = (item['id'] ?? '').toString();
-    final String? roadDist = _roadDistanceCache[id];
-    String distanciaTexto;
-    Color badgeColor;
-    if (_currentPosition == null) {
-      distanciaTexto = '📍 Sem GPS';
-      badgeColor = Colors.orange.shade700;
-    } else if (roadDist != null) {
-      // Distância por vias disponível
-      distanciaTexto = roadDist;
-      badgeColor = Colors.green.shade600;
-    } else if (!_roadDistanceCache.containsKey(id)) {
-      // OSRM ainda não calculou
-      distanciaTexto = '📍 Buscando...';
-      badgeColor = Colors.blueGrey;
-    } else {
-      // OSRM falhou — exibir não disponível
-      distanciaTexto = '📍 N/D';
-      badgeColor = Colors.grey.shade500;
-    }
 
     return Stack(
       clipBehavior: Clip.none,
@@ -4968,31 +5009,69 @@ class RotaMotoristaState extends State<RotaMotorista>
             ],
           ),
         ),
-        // Badge de distância / status GPS (canto superior direito)
+        // Badge de distância em tempo real (canto superior direito).
+        // Apenas este widget reconstrói quando a posição muda — o card fica estático.
         Positioned(
           top: 18,
           right: 18,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: badgeColor,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.near_me, color: Colors.white, size: 11),
-                const SizedBox(width: 3),
-                Text(
-                  distanciaTexto,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
+          child: StreamBuilder<Position>(
+            stream: _positionStreamController.stream,
+            initialData: _currentPosition,
+            builder: (context, snapshot) {
+              final pos = snapshot.data;
+              final coords = _geocodeCache[id];
+
+              final String distanciaTexto;
+              final Color badgeColor;
+
+              if (pos == null) {
+                distanciaTexto = '📍 Sem GPS';
+                badgeColor = Colors.orange.shade700;
+              } else if (coords == null && !_geocodeCache.containsKey(id)) {
+                // Coordenadas ainda sendo buscadas
+                distanciaTexto = '📍 Buscando...';
+                badgeColor = Colors.blueGrey;
+              } else if (coords == null) {
+                // Destino sem coordenadas válidas
+                distanciaTexto = '📍 N/D';
+                badgeColor = Colors.grey.shade500;
+              } else {
+                // Distância em linha reta — atualizada a cada posição do motorista
+                final metros = Geolocator.distanceBetween(
+                  pos.latitude,
+                  pos.longitude,
+                  coords.$1,
+                  coords.$2,
+                );
+                distanciaTexto = metros < 1000
+                    ? '${metros.round()} m'
+                    : '${(metros / 1000).toStringAsFixed(1)} km';
+                badgeColor = Colors.green.shade600;
+              }
+
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: badgeColor,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ],
-            ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.near_me, color: Colors.white, size: 11),
+                    const SizedBox(width: 3),
+                    Text(
+                      distanciaTexto,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ],
