@@ -145,7 +145,14 @@ Future<void> main() async {
     }
   } catch (_) {}
 
-  runApp(const MyApp());
+  // Ler preferência de auto-login antes de iniciar a aplicação
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final bool isLogged = prefs.getBool('is_logged') ?? false;
+    runApp(MyApp(isLogged: isLogged));
+  } catch (_) {
+    runApp(const MyApp());
+  }
 }
 
 @pragma('vm:entry-point')
@@ -240,7 +247,8 @@ class _DeliveryTaskHandler extends TaskHandler {
 }
 
 class V10DeliveryApp extends StatelessWidget {
-  const V10DeliveryApp({super.key});
+  final bool isLogged;
+  const V10DeliveryApp({super.key, required this.isLogged});
 
   @override
   Widget build(BuildContext context) {
@@ -252,18 +260,19 @@ class V10DeliveryApp extends StatelessWidget {
         scaffoldBackgroundColor: Colors.white,
       ),
       themeMode: ThemeMode.light,
-      // Inicializa a partir da Splash para respeitar "Manter logado"
-      home: const SplashPage(),
+      // Definir home com base no flag lido em main()
+      home: isLogged ? const RotaMotorista() : const SplashPage(),
     );
   }
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final bool isLogged;
+  const MyApp({super.key, this.isLogged = false});
 
   @override
   Widget build(BuildContext context) {
-    return const V10DeliveryApp();
+    return V10DeliveryApp(isLogged: isLogged);
   }
 }
 
@@ -4154,6 +4163,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         'manter_logado',
                                         false,
                                       );
+                                      await prefs.setBool('is_logged', false);
                                     } catch (_) {}
                                     try {
                                       await prefs.remove('driver_id');

@@ -25,10 +25,10 @@ class _SplashPageState extends State<SplashPage> {
     await Future.delayed(const Duration(milliseconds: 2500));
 
     final prefs = await SharedPreferences.getInstance();
-    final manter = prefs.getBool('manter_logado') ?? false;
+    final isLoggedIn = prefs.getBool('is_logged') ?? false;
     final savedId = prefs.getInt('driver_id') ?? 0;
 
-    if (manter && savedId > 0) {
+    if (isLoggedIn && savedId > 0) {
       if (mounted) {
         Navigator.pushReplacement(
           context,

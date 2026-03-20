@@ -118,6 +118,10 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setInt('driver_id', recId);
         await prefs.setString('driver_id', recId.toString());
         await prefs.setString('driver_name', nome);
+        // Marcar como autenticado para auto-login até o logout explícito
+        try {
+          await prefs.setBool('is_logged', true);
+        } catch (_) {}
         idLogado = recId.toString();
         nomeMotorista = nome;
 
@@ -185,7 +189,8 @@ class _LoginPageState extends State<LoginPage> {
           prefs.getString('driver_id') ??
           prefs.getInt('driver_id')?.toString() ??
           '';
-      if (savedKeep && idStr.isNotEmpty && idStr != '0') {
+      final isLoggedIn = prefs.getBool('is_logged') ?? false;
+      if ((isLoggedIn || savedKeep) && idStr.isNotEmpty && idStr != '0') {
         if (!mounted) return;
         await Navigator.pushReplacement(
           context,
