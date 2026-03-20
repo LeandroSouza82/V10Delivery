@@ -609,10 +609,10 @@ class RotaMotoristaState extends State<RotaMotorista>
         final posInicial = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(
             accuracy: LocationAccuracy.high,
+            distanceFilter: 20,
           ),
         );
         if (mounted) setState(() => _currentPosition = posInicial);
-        debugPrint('📍 Posição inicial capturada: $posInicial');
       } catch (e) {
         debugPrint('📍 Erro ao capturar posição inicial: $e');
       }
@@ -652,7 +652,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       // Iniciar stream de posições com alta precisão
       final settings = LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 0,
+        distanceFilter: 20,
       );
 
       // Cancelar subscription anterior se existir
@@ -1893,6 +1893,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
           timeLimit: Duration(seconds: 5),
+          distanceFilter: 20,
         ),
       );
       latFalha = pos.latitude;
@@ -2113,6 +2114,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                   locationSettings: const LocationSettings(
                     accuracy: LocationAccuracy.high,
                     timeLimit: Duration(seconds: 10),
+                    distanceFilter: 20,
                   ),
                 );
                 latController.text = pos.latitude.toStringAsFixed(5);
@@ -2471,6 +2473,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                   locationSettings: const LocationSettings(
                                     accuracy: LocationAccuracy.high,
                                     timeLimit: Duration(seconds: 5),
+                                    distanceFilter: 20,
                                   ),
                                 );
                                 latFalhaModal = pos.latitude;
@@ -2899,6 +2902,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                               const LocationSettings(
                                                 accuracy: LocationAccuracy.high,
                                                 timeLimit: Duration(seconds: 5),
+                                                distanceFilter: 20,
                                               ),
                                         );
                                     latOk = pos.latitude;
@@ -3326,10 +3330,10 @@ class RotaMotoristaState extends State<RotaMotorista>
             final pos = await Geolocator.getCurrentPosition(
               locationSettings: const LocationSettings(
                 accuracy: LocationAccuracy.high,
+                distanceFilter: 20,
               ),
             );
             if (mounted) setState(() => _currentPosition = pos);
-            debugPrint('📍 Posição forçada em carregarDados: $pos');
           } catch (e) {
             debugPrint('📍 Erro ao forçar posição em carregarDados: $e');
           }
@@ -4531,7 +4535,6 @@ class RotaMotoristaState extends State<RotaMotorista>
             if (coordLat != null && coordLng != null) {
               _geocodeCache[id] = (coordLat, coordLng);
               _enderecoCache[id] = endereco;
-              debugPrint('📍 Nominatim: id=$id -> ($coordLat, $coordLng)');
               // Calcular distância por vias logo após obter coordenadas
               final texto = await _consultarOsrm(id, coordLat, coordLng);
               _roadDistanceCache[id] = texto;
@@ -5043,9 +5046,11 @@ class RotaMotoristaState extends State<RotaMotorista>
                   coords.$1,
                   coords.$2,
                 );
-                distanciaTexto = metros < 1000
-                    ? '${metros.round()} m'
-                    : '${(metros / 1000).toStringAsFixed(1)} km';
+                // Variável de exibição inflada em 25% (apenas para UI)
+                final double metrosExibicao = metros * 1.25;
+                distanciaTexto = metrosExibicao < 1000
+                    ? '${metrosExibicao.round()} m'
+                    : '${(metrosExibicao / 1000).toStringAsFixed(1)} km';
                 badgeColor = Colors.green.shade600;
               }
 

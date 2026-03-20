@@ -24,14 +24,12 @@ class LocationService {
         Geolocator.getPositionStream(
           locationSettings: const LocationSettings(
             accuracy: LocationAccuracy.high,
-            distanceFilter: 10,
+            distanceFilter: 20,
           ),
         ).listen((Position position) async {
           try {
             if (!_isValidSC(position.latitude, position.longitude)) {
-              debugPrint(
-                '⚠️ GPS: coordenadas fora de SC (${position.latitude}, ${position.longitude}) — sinal ignorado.',
-              );
+              // coordenadas fora do limite — sinal ignorado (sem log de posição)
               return;
             }
             await _supabase
