@@ -623,7 +623,7 @@ class RotaMotoristaState extends State<RotaMotorista>
         );
         if (mounted) setState(() => _currentPosition = posInicial);
       } catch (e) {
-        debugPrint('📍 Erro ao capturar posição inicial: $e');
+        // Erro ao capturar posição inicial (log suprimido)
       }
 
       // Antes de iniciar o stream, garantir que o motorista esteja aprovado
@@ -3344,7 +3344,7 @@ class RotaMotoristaState extends State<RotaMotorista>
             );
             if (mounted) setState(() => _currentPosition = pos);
           } catch (e) {
-            debugPrint('📍 Erro ao forçar posição em carregarDados: $e');
+            // Erro ao forçar posição em carregarDados (log suprimido)
           }
         }
         // Geocodificar endereços em background.
@@ -4514,7 +4514,7 @@ class RotaMotoristaState extends State<RotaMotorista>
 
       final endereco = item['endereco'] ?? '';
       if (endereco.isEmpty) {
-        debugPrint('📍 GEO-CHECK: id=$id endereço vazio, pulando.');
+        // GEO-CHECK: endereço vazio (log suprimido)
         _geocodeCache[id] = null;
         _roadDistanceCache[id] = null;
         _enderecoCache[id] = endereco;
@@ -4524,7 +4524,7 @@ class RotaMotoristaState extends State<RotaMotorista>
       try {
         // Limpar e ancorar geograficamente — o `endereco` original NÃO é tocado.
         final enderecoParaApi = _limparEndereco(endereco);
-        debugPrint('📍 Nominatim: "$endereco" → "$enderecoParaApi"');
+        // Nominatim lookup (log suprimido)
         final query = Uri.encodeComponent(enderecoParaApi);
         final url = Uri.parse(
           'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1',
@@ -4549,24 +4549,25 @@ class RotaMotoristaState extends State<RotaMotorista>
               final texto = await _consultarOsrm(id, coordLat, coordLng);
               _roadDistanceCache[id] = texto;
             } else {
+              // Nominatim retornou resultado inválido (log suprimido)
               _geocodeCache[id] = null;
               _roadDistanceCache[id] = null;
               _enderecoCache[id] = endereco;
             }
           } else {
-            debugPrint('📍 Nominatim: [$endereco] sem resultado.');
+            // Nominatim: sem resultado (log suprimido)
             _geocodeCache[id] = null;
             _roadDistanceCache[id] = null;
             _enderecoCache[id] = endereco;
           }
         } else {
-          debugPrint('📍 Nominatim: [$endereco] HTTP ${response.statusCode}');
+          // Nominatim: HTTP ${response.statusCode} (log suprimido)
           _geocodeCache[id] = null;
           _roadDistanceCache[id] = null;
           _enderecoCache[id] = endereco;
         }
       } catch (e) {
-        debugPrint('📍 Nominatim: [$endereco] ERRO: $e');
+        // Nominatim: erro (log suprimido)
         _geocodeCache[id] = null;
         _roadDistanceCache[id] = null;
         _enderecoCache[id] = endereco;
