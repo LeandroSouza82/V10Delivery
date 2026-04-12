@@ -16,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 // removed widget imports that are not present in this workspace
 // provide minimal local placeholders and use default Flutter styles/colors
 import 'package:v10_delivery/splash_page.dart';
+import 'package:v10_delivery/globals.dart';
 
 // Local placeholders and style fallbacks
 class AppSpacing {
@@ -155,7 +156,6 @@ class HomeScreen extends RotaMotorista {
 
 class RotaMotoristaState extends State<RotaMotorista>
     with SingleTickerProviderStateMixin {
-  final String nomeMotorista = "LEANDRO";
   String? caminhoFotoSession;
   XFile? fotoEvidencia;
   late AnimationController _buscarController;
@@ -1096,7 +1096,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                                         final entregador =
                                             nomeMotorista.isNotEmpty
                                             ? nomeMotorista
-                                            : 'Leandro';
+                                            : 'Motorista';
                                         final mensagem = StringBuffer()
                                           ..writeln(
                                             '⚠️ *FALHA NA ENTREGA - V10 Delivery*',
@@ -1535,10 +1535,15 @@ class RotaMotoristaState extends State<RotaMotorista>
                         await Supabase.instance.client.auth.signOut();
                       }
 
+                      // Novo Logout Limpo
                       try {
-                        await prefs.remove('driver_uuid');
-                        await prefs.remove('driver_name');
                         await prefs.remove('driver_id');
+                        await prefs.remove('motorista_uuid');
+                        await prefs.remove('driver_name');
+                        await prefs.setBool('is_logged', false);
+
+                        nomeMotorista = "";
+                        idLogado = "";
                       } catch (_) {}
                     } catch (e) {
                       debugPrint('Erro no logout: $e');

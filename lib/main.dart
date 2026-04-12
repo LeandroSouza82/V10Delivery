@@ -288,10 +288,8 @@ class _SplashPageState extends State<SplashPage> {
   @override
   void initState() {
     super.initState();
-    // Carregar nome do motorista salvo nas prefs para evitar persistência incorreta
-    _loadSavedName();
-    _start();
-    _loadSavedName();
+    // Responsabilidade de carga agora é exclusiva do _start() p/ evitar race conditions
+    // _loadSavedName();
     _start();
   }
 
@@ -329,7 +327,32 @@ class _SplashPageState extends State<SplashPage> {
           prefs.getString('driver_id') ??
           prefs.getInt('driver_id')?.toString() ??
           '';
+      // LOGICA DE AUTO-LOGIN
       if (keep && savedIdStr.isNotEmpty && savedIdStr != '0') {
+        
+        // --- CONSULTA CIRÚRGICA DIRETO NO SUPABASE ---
+        try {
+          final response = await Supabase.instance.client
+              .from('motoristas')
+              .select('nome')
+              .eq('id', savedIdStr)
+              .maybeSingle();
+
+          if (response != null && response['nome'] != null) {
+            nomeMotorista = response['nome'].toString();
+            // Atualiza o cache local silenciosamente para manter sincronizado
+            await prefs.setString('driver_name', nomeMotorista);
+          } else {
+            nomeMotorista = prefs.getString('driver_name') ?? "Motorista";
+          }
+        } catch (e) {
+          debugPrint('Erro ao buscar nome no Supabase: $e');
+          nomeMotorista = prefs.getString('driver_name') ?? "Motorista";
+        }
+        
+        idLogado = savedIdStr;
+        // ---------------------------------------------
+
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const RotaMotorista()),
@@ -3890,7 +3913,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                       FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Text(
-                          'Olá, ${drawerName.trim().split(' ').first} 👋',
+                          'Olá, $nomeMotorista 👋',
                           style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.w600,
@@ -4158,21 +4181,16 @@ class RotaMotoristaState extends State<RotaMotorista>
                                     }
 
                                     // limpar prefs e dados locais (não bloquear o logout se falhar)
-                                    try {
-                                      await prefs.setBool(
-                                        'manter_logado',
-                                        false,
-                                      );
-                                      await prefs.setBool('is_logged', false);
-                                    } catch (_) {}
+                                    // Novo Logout Limpo
                                     try {
                                       await prefs.remove('driver_id');
+                                      await prefs.remove('motorista_uuid');
                                       await prefs.remove('driver_name');
-                                      await prefs.remove('avatar_path');
+                                      await prefs.setBool('is_logged', false);
+
+                                      nomeMotorista = "";
+                                      idLogado = "";
                                     } catch (_) {}
-                                    // NÃO remover email_salvo — usuário pediu para preservar
-                                    idLogado = null;
-                                    nomeMotorista = '';
                                   } catch (e) {
                                     debugPrint('Erro no fluxo de logout: $e');
                                   }
@@ -4238,7 +4256,7 @@ class RotaMotoristaState extends State<RotaMotorista>
                           ),
                           SizedBox(height: 6),
                           Text(
-                            'Bom trabalho, Leandro!',
+                            'Bom trabalho, $nomeMotorista!',
                             style: TextStyle(fontSize: 16, color: Colors.grey),
                           ),
                           SizedBox(height: 20),

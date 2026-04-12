@@ -163,27 +163,29 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
-    _checkAutoLogin();
+    _carregarPersistencia();
+  }
+
+  Future<void> _carregarPersistencia() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      // Recupera o estado da caixa; se não existir, assume false
+      _keep = prefs.getBool('manter_logado') ?? false;
+
+      final emailSalvo = prefs.getString('email_salvo') ?? '';
+      _emailCtl.text = emailSalvo;
+
+      // CORREÇÃO: Liga a caixinha visual se existir um e-mail salvo
+      if (emailSalvo.isNotEmpty) {
+        _rememberEmail = true;
+      }
+    });
   }
 
   Future<void> _checkAutoLogin() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      // inicializar estado do checkbox a partir da preferência salva
       final savedKeep = prefs.getBool('manter_logado') ?? false;
-      if (mounted) {
-        setState(() => _keep = savedKeep);
-      }
-      // carregar e-mail salvo se houver
-      final savedEmail = prefs.getString('email_salvo');
-      if (savedEmail != null && savedEmail.isNotEmpty) {
-        if (mounted) {
-          setState(() {
-            _rememberEmail = true;
-            _emailCtl.text = savedEmail;
-          });
-        }
-      }
       final idStr =
           prefs.getString('motorista_uuid') ??
           prefs.getString('driver_id') ??
@@ -191,6 +193,8 @@ class _LoginPageState extends State<LoginPage> {
           '';
       final isLoggedIn = prefs.getBool('is_logged') ?? false;
       if ((isLoggedIn || savedKeep) && idStr.isNotEmpty && idStr != '0') {
+        idLogado = idStr;
+        nomeMotorista = prefs.getString('driver_name') ?? 'Motorista';
         if (!mounted) return;
         await Navigator.pushReplacement(
           context,
